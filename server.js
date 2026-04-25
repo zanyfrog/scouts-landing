@@ -4,7 +4,8 @@ const path = require("path");
 const orm = require("../scouts.orm");
 
 const root = __dirname;
-const port = 4173;
+const port = Number(process.env.PORT || 4173);
+const ormBaseUrl = String(process.env.ORM_BASE_URL || "").replace(/\/+$/, "");
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -38,7 +39,45 @@ function json(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function forwardApiRequest(req, res) {
+  return new Promise((resolve, reject) => {
+    const targetUrl = new URL(req.url, `${ormBaseUrl}/`);
+    const proxyReq = http.request(
+      targetUrl,
+      {
+        method: req.method,
+        headers: {
+          "Content-Type": req.headers["content-type"] || "application/json; charset=utf-8",
+        },
+      },
+      (proxyRes) => {
+        const chunks = [];
+        proxyRes.on("data", (chunk) => chunks.push(chunk));
+        proxyRes.on("end", () => {
+          const payload = Buffer.concat(chunks);
+          res.writeHead(proxyRes.statusCode || 502, {
+            "Content-Type": proxyRes.headers["content-type"] || "application/json; charset=utf-8",
+            "Cache-Control": "no-store",
+          });
+          res.end(payload);
+          resolve(true);
+        });
+      }
+    );
+
+    proxyReq.on("error", reject);
+    req.on("data", (chunk) => proxyReq.write(chunk));
+    req.on("end", () => proxyReq.end());
+    req.on("error", reject);
+  });
+}
+
 async function handleApi(req, res) {
+  if (ormBaseUrl && req.url.startsWith("/api/")) {
+    await forwardApiRequest(req, res);
+    return true;
+  }
+
   if (req.method === "GET" && req.url === "/api/data") {
     json(res, 200, orm.getDataPayload());
     return true;
@@ -132,5 +171,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, () => {
-  console.log(`Scout review server running at http://127.0.0.1:${port}`);
+  console.log(`Scout review server running at http://0.0.0.0:${port}`);
 });
