@@ -273,7 +273,12 @@ textarea { min-height: 120px; resize: vertical; }
 .leader-identity { display: inline-flex; align-items: center; gap: 10px; color: var(--muted); font-weight: 600; }
 .leader-emblem { width: 42px; height: 42px; flex: 0 0 42px; border-radius: 12px; border: 1px solid rgba(50, 82, 61, 0.14); background: rgba(255, 250, 242, 0.95); object-fit: cover; }
 .adult-children-list { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.adult-children-list.compact { margin-bottom: 0; }
 .child-chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px; background: rgba(50, 82, 61, 0.08); color: var(--forest-deep); font-weight: 600; }
+.scout-roster-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; align-items: start; }
+.scout-roster-card .adult-children-list { margin-bottom: 0; }
+.scout-roster-chip { align-items: flex-start; flex-direction: column; border-radius: var(--radius-sm); }
+.scout-roster-chip small { color: var(--muted); font-weight: 600; }
 .adult-child-add { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .patrol-badge-editor { display: grid; grid-template-columns: 42px 1fr; gap: 12px; align-items: center; min-width: 280px; }
 .patrol-badge-fields { display: grid; gap: 8px; }
@@ -291,6 +296,32 @@ textarea { min-height: 120px; resize: vertical; }
 .patrol-editor-table tr.is-marked-for-removal { opacity: 0.55; background: rgba(161, 88, 73, 0.08); }
 .patrol-editor-table tr.is-marked-for-removal input,
 .patrol-editor-table tr.is-marked-for-removal select { text-decoration: line-through; }
+.patrol-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; align-items: start; }
+.patrol-editor-card { display: grid; gap: 18px; }
+.patrol-editor-card.is-marked-for-removal { opacity: 0.58; background: rgba(161, 88, 73, 0.08); }
+.patrol-editor-card.is-marked-for-removal input,
+.patrol-editor-card.is-marked-for-removal select { text-decoration: line-through; }
+.patrol-card-header { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: start; }
+.patrol-card-title input { min-height: 52px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--forest-deep); font-family: "Source Serif 4", serif; font-size: 1.7rem; font-weight: 700; line-height: 1.1; }
+.patrol-card-title input:focus { outline: 2px solid rgba(50, 82, 61, 0.18); outline-offset: 4px; border-radius: 8px; }
+.patrol-card-badge { display: grid; justify-items: end; gap: 8px; }
+.patrol-badge-click-target { position: relative; display: block; overflow: hidden; cursor: pointer; }
+.patrol-badge-click-target .patrol-badge-preview { width: 82px; height: 82px; border-radius: 16px; border: 1px solid rgba(50, 82, 61, 0.14); background: rgba(255, 250, 242, 0.95); object-fit: contain; box-shadow: 0 10px 24px rgba(16, 33, 26, 0.10); }
+.patrol-badge-click-target:hover .patrol-badge-preview,
+.patrol-badge-click-target:focus-within .patrol-badge-preview { border-color: rgba(50, 82, 61, 0.36); box-shadow: 0 12px 28px rgba(16, 33, 26, 0.16); }
+.patrol-card-leaders { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.patrol-card-leaders label { display: grid; gap: 7px; min-width: 0; }
+.patrol-card-leaders span,
+.patrol-card-members-heading span { color: var(--muted); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.patrol-card-leaders select { width: 100%; min-width: 0; }
+.patrol-card-members { display: grid; gap: 10px; }
+.patrol-card-members-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.patrol-card-members .patrol-scout-list { min-height: 42px; }
+.patrol-add-list { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px; border-radius: var(--radius-sm); background: rgba(50, 82, 61, 0.06); }
+.patrol-add-list.is-hidden { display: none; }
+.patrol-add-list select { min-width: min(100%, 240px); }
+.patrol-card-actions { display: flex; justify-content: flex-end; }
+@media (max-width: 700px) { .patrol-card-grid, .patrol-card-leaders { grid-template-columns: 1fr; } .patrol-card-header { grid-template-columns: 1fr; } .patrol-card-badge { justify-items: start; } }
 .icon-button.mini { width: 24px; height: 24px; font-size: 0.9rem; }
 
 .icon-button { width: 34px; height: 34px; border: 1px solid rgba(161, 88, 73, 0.25); border-radius: 999px; background: rgba(161, 88, 73, 0.10); color: #8a3d2f; font-size: 1.1rem; line-height: 1; cursor: pointer; }

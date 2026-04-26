@@ -148,7 +148,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const requested = req.url === "/" ? "/index.html" : req.url;
+    const requestedUrl = new URL(req.url, "http://localhost");
+    const requested = requestedUrl.pathname === "/" ? "/index.html" : requestedUrl.pathname;
     const filePath = resolveStaticFilePath(requested);
 
     fs.readFile(filePath, (error, data) => {
