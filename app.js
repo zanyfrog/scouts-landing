@@ -1,4 +1,4 @@
-﻿const patrolNames = ["Python Patrol", "Nuclear Meese", "Flaming Arrows", "Senior"];
+const patrolNames = ["Python Patrol", "Nuclear Meese", "Flaming Arrows", "Senior"];
 let scouts = [];
 let adults = [];
 let adultLeaders = [];
@@ -12,8 +12,11 @@ let showAddAdultRow = false;
 let showAddPatrolRow = false;
 const defaultEvents = [];
 let events = [];
+let holidays = [];
 const unassignedPatrolValue = "";
 const unassignedPatrolLabel = "Unassigned";
+const defaultScoutAvatar = "assets/default-scout-avatar.svg";
+const legacyDefaultScoutAvatar = "https://i.pinimg.com/474x/24/99/03/249903173ee16b3346ba320a24e56a8b.jpg";
 const dashboards = { scout: { eyebrow: "Scout dashboard", title: "Your next events, rank progress, and patrol activity.", intro: "After login, scouts land on a role-based dashboard that keeps meetings, patrol updates, and advancement in one place.", tasks: ["Review upcoming troop and patrol events", "Check current rank progress and recent achievements", "See attendance history and service-hour highlights"], reports: ["Attendance report access when scout-visible data applies"] }, parent: { eyebrow: "Parent dashboard", title: "A family view of upcoming events and scout progress.", intro: "Parents can see the information they are allowed to access, including upcoming events, linked scout details, and family-relevant reports.", tasks: ["View upcoming troop events and invitations", "Track linked scout attendance, rank progress, and service hours", "Review reports tied to accessible family data"], reports: ["Attendance reports for linked scout data", "Rank-history report where family access is allowed"] }, "adult-leader": { eyebrow: "Adult leader dashboard", title: "Manage attendance, calendar updates, and troop operations.", intro: "Adult leaders can handle event attendance, calendar-driven updates, and role-relevant reports from their landing page.", tasks: ["Mark attendance for non-regular-meeting events", "Create or edit Google Calendar-backed events", "Enter service hours and fundraising records", "Review youth and adult org charts"], reports: ["Roster report", "Org chart", "Rank-history report", "Service-hours report", "Fundraising report", "Attendance report"] }, committee: { eyebrow: "Committee dashboard", title: "See committee-relevant events, reporting, and troop administration.", intro: "Committee members land on a dashboard tuned to the data and reports they are permitted to see.", tasks: ["Review committee-visible events", "Access reports for authorized troop data", "Monitor upcoming ceremonies and planning milestones"], reports: ["Reports available when the committee role has access to the underlying data"] }, admin: { eyebrow: "Administrator dashboard", title: "Administrative oversight across people, reports, and audit history.", intro: "Administrators receive a broad role-based dashboard with access to operations, reporting, and system oversight.", tasks: ["Approve registrations and manage person records", "Review audit history and troop-role access", "Access all reporting supported by administrator permissions"], reports: ["Roster report", "Org chart", "Rank-history report", "Service-hours report", "Fundraising report", "Attendance report"] } };
 const attendanceHistory = [
   {
@@ -64,11 +67,13 @@ const attendanceHistory = [
 let expandedAttendanceMonths = new Set(["2026-04"]);
 const adultRoleOptions = ["Scoutmaster", "Assistant Scoutmaster", "Committee Chair", "Committee Member", "Advancement Chair", "Treasurer", "Secretary", "Outdoor Activities Coordinator", "Equipment Coordinator", "Transportation Coordinator"];
 const scoutLeadershipOptions = ["", "Senior Patrol Leader", "Assistant Senior Patrol Leader", "Patrol Leader", "Assistant Patrol Leader", "Scribe", "Quartermaster", "Historian", "Instructor", "Librarian", "Chaplain Aide", "Webmaster", "Outdoor Ethics Guide", "Bugler", "Den Chief", "Troop Guide", "OA Representative"];
+const scoutRankOptions = ["Scout", "Tenderfoot", "Second Class", "First Class", "Star", "Life", "Eagle"];
 const eventAudienceOptions = ["Troop", "Patrol", "Individuals", "Unit", "Adults"];
 const imageReactionTypes = ["like", "love", "laugh", "disappointed"];
 const scoutRankOrder = { Eagle: 8, Life: 7, Star: 6, "First Class": 5, "Second Class": 4, Tenderfoot: 3, Scout: 2, "Scout Rank": 2, Bobcat: 1 };
 const eventEditorFieldSelector = "[data-event-edit-title], [data-event-edit-category], [data-event-edit-start], [data-event-edit-end], [data-event-edit-home-base], [data-event-edit-audience], [data-event-edit-description], [data-event-edit-note], [data-event-edit-upcoming], [data-event-edit-repeat-enabled], [data-event-edit-repeat-frequency], [data-event-edit-repeat-interval], [data-event-edit-repeat-until], [data-event-edit-repeat-monthly-pattern], [data-event-edit-repeat-monthly-ordinal], [data-event-edit-repeat-monthly-weekday], [data-gallery-title], [data-gallery-description], [data-activity-description], [data-activity-location], [data-activity-start], [data-activity-end]";
 let eventAutosaveTimer = null;
+let pendingCalendarEventScroll = false;
 const prototypeToday = new Date();
 const saintJosephLocation = "Saint Joseph Catholic Church - Eldersburg";
 function slugifyName(value) { return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, ""); }
@@ -82,28 +87,52 @@ function serializePatrol(patrol) { return { name: patrol.name, badge: patrol.bad
 function getPatrolRecord(patrolName) { return patrols.find((patrol) => patrol.name.toLowerCase() === String(patrolName || "").trim().toLowerCase()) || null; }
 function getPatrolDisplayName(patrolName) { return String(patrolName || "").trim() || unassignedPatrolLabel; }
 function isPatrolSpecificRole(role) { return role === "Patrol Leader" || role === "Assistant Patrol Leader"; }
+function splitScoutName(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  return { firstName: parts[0] || "", lastName: parts.slice(1).join(" ") };
+}
+function getScoutFirstName(scout) { return String(scout?.firstName || "").trim() || splitScoutName(scout?.name).firstName; }
+function getScoutLastName(scout) { return String(scout?.lastName || "").trim() || splitScoutName(scout?.name).lastName; }
+function getScoutFullName(scout) { return [getScoutFirstName(scout), getScoutLastName(scout)].filter(Boolean).join(" ") || String(scout?.name || "").trim() || "Unknown scout"; }
+function getDefaultScoutNickname(scout) { return getScoutFirstName(scout); }
+function getScoutNickname(scout) { return String(scout?.nickname || "").trim() || getDefaultScoutNickname(scout); }
+function getScoutDirectoryName(scout) {
+  const name = getScoutFullName(scout);
+  const firstName = getDefaultScoutNickname(scout);
+  const nickname = getScoutNickname(scout);
+  return nickname && nickname.toLowerCase() !== firstName.toLowerCase() ? `${name} (${nickname})` : name;
+}
+function getScoutAvatar(scout) {
+  const avatar = String(scout?.avatar || "").trim();
+  return !avatar || avatar === legacyDefaultScoutAvatar ? defaultScoutAvatar : avatar;
+}
+function renderScoutAvatar(scout, className = "scout-avatar") {
+  const label = getScoutFullName(scout);
+  return `<img class="${className}" src="${getScoutAvatar(scout)}" alt="${label} avatar" />`;
+}
 function renderScoutName(sc, options = {}) {
-  const label = sc?.name || "Unknown scout";
+  const label = options.label || getScoutFullName(sc);
   const className = options.className || "text-link";
-  if (canSeeOrgChart() && sc?.id) {
-    const target = options.newTab === false ? "" : ` target="_blank" rel="noreferrer"`;
-    return `<a class="${className}" href="#/scouts/${sc.id}"${target}>${label}</a>`;
-  }
-  return label;
+  const nameMarkup = canSeeOrgChart() && sc?.id
+    ? `<a class="${className}" href="#/scouts/${sc.id}"${options.newTab === false ? "" : ` target="_blank" rel="noreferrer"`}>${label}</a>`
+    : `<span>${label}</span>`;
+  return `<span class="scout-name-with-avatar">${renderScoutAvatar(sc)}${nameMarkup}</span>`;
 }
 function getPatrolNameList(extraPatrols = [], options = {}) {
   const includeUnassigned = options.includeUnassigned || [...scouts, ...roster, ...extraPatrols.map((patrol) => ({ patrol }))].some((entry) => !String(entry?.patrol ?? entry).trim());
   const names = uniqueBy([...patrolNames, ...patrols.map((patrol) => patrol.name), ...scouts.map((scout) => scout.patrol), ...extraPatrols].filter((name) => name !== undefined && name !== null && String(name).trim()), (name) => String(name).toLowerCase()).sort((a, b) => a.localeCompare(b));
   return includeUnassigned ? [unassignedPatrolValue, ...names] : names;
 }
-function normalizeScout(record) { const patrol = String(record.patrol || "").trim(); const leadershipRole = record.leadershipRole || ""; return { id: record.id, name: record.name, gender: record.gender || "not specified", patrol, patrolBadge: getPatrolBadgeValue(patrol, record.patrolBadge), rank: record.rank || "Scout", attendance: record.attendance || "Present", leadershipRole: !patrol && isPatrolSpecificRole(leadershipRole) ? "" : leadershipRole, parents: [] }; }
-function normalizeAdult(record) { return { id: record.id, name: record.name, relationship: record.relationship || "Adult leader", email: record.email || "" }; }
+function normalizeScout(record) { const patrol = String(record.patrol || "").trim(); const leadershipRole = record.leadershipRole || ""; const firstName = getScoutFirstName(record); const lastName = getScoutLastName(record); const name = [firstName, lastName].filter(Boolean).join(" ") || record.name; return { id: record.id, name, firstName, lastName, nickname: getScoutNickname({ ...record, name, firstName, lastName }), gender: record.gender || "not specified", patrol, patrolBadge: getPatrolBadgeValue(patrol, record.patrolBadge), rank: record.rank || "Scout", leadershipRole: !patrol && isPatrolSpecificRole(leadershipRole) ? "" : leadershipRole, avatar: String(record.avatar || "").trim() || defaultScoutAvatar, parents: [] }; }
+function normalizeAdult(record) { return { id: record.id, name: record.name, relationship: record.relationship || "Adult leader", email: record.email || "", homePhone: record.homePhone || "", cellPhone: record.cellPhone || "" }; }
 function normalizeAdultLeader(record) { return { adultId: record.adultId || `adult-${slugifyName(record.name)}`, role: record.role || "Committee Member" }; }
 function normalizeAdultScoutRelationship(record) { return { adultId: record.adultId, scoutId: record.scoutId, relationship: record.relationship || "Parent", priority: String(record.priority || "1") }; }
-function serializeScout(scout) { return { id: scout.id, name: scout.name, gender: scout.gender, patrol: scout.patrol, patrolBadge: getPatrolBadgeValue(scout.patrol, scout.patrolBadge), rank: scout.rank, attendance: scout.attendance, leadershipRole: scout.leadershipRole }; }
-function serializeAdult(adult) { return { id: adult.id, name: adult.name, relationship: adult.relationship, email: adult.email }; }
+function normalizeHoliday(record) { const date = String(record?.date || "").trim(); const rawEndDate = String(record?.endDate || date).trim(); const endDate = rawEndDate && date && rawEndDate < date ? date : rawEndDate; return { id: String(record?.id || "").trim() || nextHolidayId(), name: String(record?.name || "Custom holiday").trim(), date, endDate, placedBy: String(record?.placedBy || "").trim(), role: String(record?.role || "").trim() || "Adult leader", note: String(record?.note || "").trim() }; }
+function serializeScout(scout) { const firstName = getScoutFirstName(scout); const lastName = getScoutLastName(scout); const name = [firstName, lastName].filter(Boolean).join(" ") || scout.name; return { id: scout.id, name, firstName, lastName, nickname: getScoutNickname({ ...scout, name, firstName, lastName }), gender: scout.gender, patrol: scout.patrol, patrolBadge: getPatrolBadgeValue(scout.patrol, scout.patrolBadge), rank: scout.rank, leadershipRole: scout.leadershipRole, avatar: getScoutAvatar(scout) }; }
+function serializeAdult(adult) { return { id: adult.id, name: adult.name, relationship: adult.relationship, email: adult.email, homePhone: adult.homePhone || "", cellPhone: adult.cellPhone || "" }; }
 function serializeAdultLeader(leader) { return { adultId: leader.adultId, role: leader.role }; }
 function serializeAdultScoutRelationship(relationship) { return { adultId: relationship.adultId, scoutId: relationship.scoutId, relationship: relationship.relationship, priority: relationship.priority }; }
+function serializeHoliday(holiday) { return { id: holiday.id, name: holiday.name, date: holiday.date, endDate: holiday.endDate || holiday.date, placedBy: holiday.placedBy, role: holiday.role, note: holiday.note }; }
 function normalizeEventLocation(value) {
   const normalized = String(value || "").trim();
   const compact = normalized.toLowerCase().replace(/\s+/g, " ");
@@ -394,6 +423,50 @@ function getSelectedCalendarDate() { return window.localStorage.getItem("troop88
 function setSelectedCalendarDate(dateKey) { if (dateKey) window.localStorage.setItem("troop883-selected-date", dateKey); }
 function getSelectedCalendarEventId() { return window.localStorage.getItem("troop883-selected-event-id") || ""; }
 function setSelectedCalendarEventId(eventId) { if (eventId) { window.localStorage.setItem("troop883-selected-event-id", eventId); return; } window.localStorage.removeItem("troop883-selected-event-id"); }
+async function hydratePublicCalendarEventMedia(eventId) {
+  if (!eventId || sessionToken) return;
+  const event = getEventById(eventId);
+  if (!event || (event.image && event.image !== scoutOrgLogo && (event.gallery || []).some((item) => normalizeGalleryItem(item).src === event.image))) return;
+  try {
+    const response = await fetch(`/api/public/events/${encodeURIComponent(eventId)}`, { cache: "no-store" });
+    if (!response.ok) return;
+    const payload = await response.json();
+    const hydrated = normalizeEvent(payload.data || payload);
+    const target = getEventById(eventId);
+    if (!target) return;
+    target.image = hydrated.image || target.image;
+    target.gallery = hydrated.gallery?.length ? hydrated.gallery : target.gallery;
+  } catch (error) {}
+}
+function scrollSelectedCalendarEventIntoView() {
+  const scrollToShowcase = () => {
+    const showcase = document.querySelector("[data-calendar-event-showcase]");
+    if (!showcase) return;
+    showcase.setAttribute("tabindex", "-1");
+    showcase.focus({ preventScroll: false });
+    const top = showcase.getBoundingClientRect().top + window.scrollY - 16;
+    showcase.scrollIntoView({ block: "start", behavior: "auto" });
+    const targetTop = Math.max(0, top);
+    window.scrollTo(0, targetTop);
+    document.scrollingElement?.scrollTo(0, targetTop);
+    document.documentElement.scrollTop = targetTop;
+    document.body.scrollTop = targetTop;
+  };
+  window.requestAnimationFrame(() => {
+    scrollToShowcase();
+    window.setTimeout(scrollToShowcase, 120);
+    window.setTimeout(scrollToShowcase, 600);
+    window.setTimeout(scrollToShowcase, 1400);
+  });
+}
+function requestSelectedCalendarEventScroll() {
+  pendingCalendarEventScroll = true;
+}
+function flushSelectedCalendarEventScroll() {
+  if (!pendingCalendarEventScroll) return;
+  pendingCalendarEventScroll = false;
+  scrollSelectedCalendarEventIntoView();
+}
 function ensureSelectedMonth() {
   const resolvedMonth = getSelectedEventMonth();
   if (resolvedMonth) {
@@ -513,11 +586,13 @@ async function createEventForDate(dateKey) {
 }
 function renderCalendarEventShowcase(event) {
   if (!event) {
-    return `<article class="panel calendar-event-showcase empty"><div class="panel-heading"><h3>Select an event</h3><p>Click any event on the calendar to see the full event summary here.</p></div><p class="event-description">The calendar stays in place while this panel updates with the chosen event's details.</p></article>`;
+    return `<article class="panel calendar-event-showcase empty" data-calendar-event-showcase><div class="panel-heading"><h3>Select an event</h3><p>Click any event on the calendar to see the full event summary here.</p></div><p class="event-description">The calendar stays in place while this panel updates with the chosen event's details.</p></article>`;
   }
   const activities = event.activities || [];
-  const gallery = getDisplayMediaItems(event);
-  return `<article class="calendar-event-showcase${isAdultEvent(event) ? " adult-event-theme" : ""}"><div class="calendar-event-hero"><div class="calendar-event-image-wrap">${renderGalleryMedia(gallery[0], event.title)}</div><div class="calendar-event-copy"><p class="eyebrow">Selected event</p><h3>${event.title}</h3><p class="event-description">${event.description || "No event description yet."}</p><div class="event-meta"><span>${event.category || "Event"}</span><span>${event.audience || "Audience TBD"}</span><span>${event.dateLabel || formatExactEventDateTime(event.startDate)}</span>${event.repeatEnabled ? `<span>${formatRepeatSummary(event)}</span>` : ""}</div><div class="calendar-event-facts"><div><span class="calendar-fact-label">Home base</span><strong>${event.homeBase || "Home base TBD"}</strong></div><div><span class="calendar-fact-label">Starts</span><strong>${formatExactEventDateTime(event.startDate)}</strong></div><div><span class="calendar-fact-label">Ends</span><strong>${formatExactEventDateTime(event.endDate || event.startDate)}</strong></div></div><div class="detail-note">${event.detailNote || "No additional event note yet."}</div><div class="scribe-actions">${canSeeOrgChart() ? `<a class="button secondary" href="#/events/${event.id}">Edit event</a>` : `<a class="button secondary" href="#/events/${event.id}">Open full event page</a>`}</div></div></div><div class="calendar-event-sections"><section class="panel"><div class="panel-heading"><h3>Activities</h3><p>${activities.length ? `${activities.length} planned item${activities.length === 1 ? "" : "s"}` : "No activities have been added yet."}</p></div>${activities.length ? `<div class="detail-stack">${activities.map((activity) => `<article class="month-summary-card"><div class="panel-heading"><h3>${activity.description || "Activity"}</h3><p>${formatExactEventDateTime(activity.startDate)}${activity.endDate ? ` - ${formatExactEventDateTime(activity.endDate)}` : ""}</p></div><div class="event-meta"><span>${activity.location || "Location TBD"}</span></div></article>`).join("")}</div>` : `<p class="event-description">This event does not have activity details yet.</p>`}</section><section class="panel"><div class="panel-heading"><h3>Quick info</h3><p>A concise overview for calendar browsing.</p></div><ul class="detail-list"><li>Audience: ${event.audience || "Audience TBD"}</li><li>Category: ${event.category || "Event"}</li><li>Home base: ${event.homeBase || "Home base TBD"}</li><li>Gallery media items: ${gallery.length}</li>${event.repeatEnabled ? `<li>${formatRepeatSummary(event)}</li>` : ""}</ul></section></div></article>`;
+  const gallery = getDisplayMediaItems(event).filter((item) => item?.src);
+  const leadMedia = gallery[0] || normalizeGalleryItem({ src: event.image || scoutOrgLogo }, 0);
+  const leadMediaMarkup = renderGalleryMedia(leadMedia, getGalleryDisplayTitle(event, leadMedia, 0)).replace('class="event-gallery-media"', 'class="calendar-event-image"');
+  return `<article class="calendar-event-showcase${isAdultEvent(event) ? " adult-event-theme" : ""}" data-calendar-event-showcase><div class="calendar-event-hero"><div class="calendar-event-image-wrap">${leadMediaMarkup}</div><div class="calendar-event-copy"><p class="eyebrow">Selected event</p><h3>${event.title}</h3><p class="event-description">${event.description || "No event description yet."}</p><div class="event-meta"><span>${event.category || "Event"}</span><span>${event.audience || "Audience TBD"}</span><span>${event.dateLabel || formatExactEventDateTime(event.startDate)}</span>${event.repeatEnabled ? `<span>${formatRepeatSummary(event)}</span>` : ""}</div><div class="calendar-event-facts"><div><span class="calendar-fact-label">Home base</span><strong>${event.homeBase || "Home base TBD"}</strong></div><div><span class="calendar-fact-label">Starts</span><strong>${formatExactEventDateTime(event.startDate)}</strong></div><div><span class="calendar-fact-label">Ends</span><strong>${formatExactEventDateTime(event.endDate || event.startDate)}</strong></div></div><div class="detail-note">${event.detailNote || "No additional event note yet."}</div><div class="scribe-actions">${canSeeOrgChart() ? `<a class="button secondary" href="#/events/${event.id}">Edit event</a>` : `<a class="button secondary" href="#/events/${event.id}">Open full event page</a>`}</div></div></div><div class="calendar-event-sections"><section class="panel"><div class="panel-heading"><h3>Activities</h3><p>${activities.length ? `${activities.length} planned item${activities.length === 1 ? "" : "s"}` : "No activities have been added yet."}</p></div>${activities.length ? `<div class="detail-stack">${activities.map((activity) => `<article class="month-summary-card"><div class="panel-heading"><h3>${activity.description || "Activity"}</h3><p>${formatExactEventDateTime(activity.startDate)}${activity.endDate ? ` - ${formatExactEventDateTime(activity.endDate)}` : ""}</p></div><div class="event-meta"><span>${activity.location || "Location TBD"}</span></div></article>`).join("")}</div>` : `<p class="event-description">This event does not have activity details yet.</p>`}</section><section class="panel"><div class="panel-heading"><h3>Quick info</h3><p>A concise overview for calendar browsing.</p></div><ul class="detail-list"><li>Audience: ${event.audience || "Audience TBD"}</li><li>Category: ${event.category || "Event"}</li><li>Home base: ${event.homeBase || "Home base TBD"}</li><li>Gallery media items: ${gallery.length}</li>${event.repeatEnabled ? `<li>${formatRepeatSummary(event)}</li>` : ""}</ul></section></div></article>`;
 }
 function renderImageReactionButtons(image) {
   const viewer = getCurrentViewerIdentity();
@@ -530,7 +605,7 @@ function renderImageReactionButtons(image) {
 }
 function renderImageComments(image) {
   const comments = image.comments || [];
-  return `<div class="image-comments"><div class="panel-heading compact"><h4>Comments</h4><p>${comments.length ? `${comments.length} comment${comments.length === 1 ? "" : "s"}` : "No comments yet."}</p></div>${comments.length ? `<div class="image-comment-list">${comments.map((comment) => `<article class="image-comment"><div class="image-comment-meta"><strong>${comment.authorName}</strong><span>${formatCommentDateTime(comment.createdAt)}</span></div><p>${comment.text}</p>${canRemoveGalleryComment(comment) ? `<button class="text-link image-comment-remove" type="button" data-remove-gallery-comment="${comment.id}" data-gallery-image-id="${image.id}">Remove comment</button>` : ""}</article>`).join("")}</div>` : `<p class="event-description">Be the first to comment on this image.</p>`}${canInteractWithGallerySocial() ? `<div class="image-comment-form"><textarea data-gallery-comment-input="${image.id}" aria-label="Write a comment for ${image.title || `image ${image.id}`}" placeholder="Add a comment"></textarea><button class="button secondary" type="button" data-add-gallery-comment="${image.id}">Post comment</button></div>` : `<p class="event-description">Switch out of Public view to comment or react.</p>`}</div>`;
+  return `<div class="image-comments"><div class="panel-heading compact"><h4>Comments</h4><p>${comments.length ? `${comments.length} comment${comments.length === 1 ? "" : "s"}` : "No comments yet."}</p></div>${comments.length ? `<div class="image-comment-list">${comments.map((comment) => `<article class="image-comment"><div class="image-comment-meta"><strong>${comment.authorName}</strong><span>${formatCommentDateTime(comment.createdAt)}</span></div><p>${comment.text}</p>${canRemoveGalleryComment(comment) ? `<button class="text-link image-comment-remove" type="button" data-remove-gallery-comment="${comment.id}" data-gallery-image-id="${image.id}">Remove comment</button>` : ""}</article>`).join("")}</div>` : `<p class="event-description">Be the first to comment on this image.</p>`}${canInteractWithGallerySocial() ? `<div class="image-comment-form"><textarea data-gallery-comment-input="${image.id}" aria-label="Write a comment for ${image.title || `image ${image.id}`}" placeholder="Add a comment"></textarea><button class="button secondary" type="button" data-add-gallery-comment="${image.id}">Post comment</button></div>` : `<p class="event-description">Sign in to comment or react.</p>`}</div>`;
 }
 function renderGalleryMedia(image, title) {
   if (image.mediaType === "video") {
@@ -589,11 +664,25 @@ function getGalleryImageById(event, imageId) { return (event.gallery || []).find
 function buildCalendarCells(monthKey) { const [year, month] = monthKey.split("-").map(Number); const firstDay = new Date(year, month - 1, 1); const daysInMonth = new Date(year, month, 0).getDate(); const startOffset = firstDay.getDay(); const eventsByDay = new Map(); for (let day = 1; day <= daysInMonth; day += 1) { const currentDate = new Date(year, month - 1, day); eventsByDay.set(day, events.filter((event) => eventOccursOnDate(event, currentDate)).sort((a, b) => (parseEventStartDate(a)?.getTime() || 0) - (parseEventStartDate(b)?.getTime() || 0))); } const cells = []; for (let index = 0; index < startOffset; index += 1) cells.push({ empty: true, key: `empty-${index}` }); for (let day = 1; day <= daysInMonth; day += 1) cells.push({ empty: false, day, events: eventsByDay.get(day) || [], key: `day-${day}` }); while (cells.length % 7 !== 0) cells.push({ empty: true, key: `tail-${cells.length}` }); return cells; }
 function formatEventListDate(event) { const date = parseEventStartDate(event); return date ? date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : event.dateLabel; }
 function getRollingEventList(direction) { const today = new Date(prototypeToday); today.setHours(0, 0, 0, 0); const windowMs = 21 * 24 * 60 * 60 * 1000; return events.filter((event) => { const date = parseEventStartDate(event); if (!date) return false; const time = date.getTime(); if (direction === "past") return time < today.getTime() && time >= today.getTime() - windowMs; return time >= today.getTime() && time <= today.getTime() + windowMs; }).sort((a, b) => direction === "past" ? (parseEventStartDate(b)?.getTime() || 0) - (parseEventStartDate(a)?.getTime() || 0) : (parseEventStartDate(a)?.getTime() || 0) - (parseEventStartDate(b)?.getTime() || 0)).slice(0, 3); }
+function getEventDetailPreviewEvents() {
+  const sortedEvents = getSortedEvents();
+  const recentEvents = sortedEvents.filter((event) => !isUpcomingEvent(event)).slice(-2);
+  const upcomingEvents = sortedEvents.filter((event) => isUpcomingEvent(event)).slice(0, 2);
+  return [...recentEvents, ...upcomingEvents];
+}
 function getAttendanceHistoryItem(itemId) { return attendanceHistory.flatMap((month) => month.items.map((item) => ({ ...item, monthId: month.id, month: month.month }))).find((item) => item.id === itemId) || null; }
 function getAttendanceStatusForItem(item, scout, index) { const seed = `${item.id}-${scout.id}`.split("").reduce((total, char) => total + char.charCodeAt(0), 0); return (seed + index) % 5 === 0 ? "Absent" : "Present"; }
 function getScoutRankValue(rank) { return scoutRankOrder[String(rank || "").trim()] || 0; }
 function sortScoutsByRankWithinPatrol(items) {
   return [...items].sort((a, b) => getScoutRankValue(b.rank) - getScoutRankValue(a.rank) || a.name.localeCompare(b.name));
+}
+function getPatrolRosterLeadershipValue(scout) {
+  if (scout?.leadershipRole === "Patrol Leader") return 0;
+  if (scout?.leadershipRole === "Assistant Patrol Leader") return 1;
+  return 2;
+}
+function sortScoutsForPatrolRoster(items) {
+  return [...items].sort((a, b) => getPatrolRosterLeadershipValue(a) - getPatrolRosterLeadershipValue(b) || a.name.localeCompare(b.name));
 }
 function getAttendanceWindowStart(totalItems, visibleCount = 4) {
   const maxStart = Math.max(0, totalItems - visibleCount);
@@ -628,11 +717,16 @@ function renderAdultLeaderAttendanceMatrix() {
   const windowStart = getAttendanceWindowStart(attendanceItems.length, visibleCount);
   const visibleItems = attendanceItems.slice(windowStart, windowStart + visibleCount);
   const maxStart = Math.max(0, attendanceItems.length - visibleCount);
-  return `<section class="section"><div class="section-heading"><div><p class="eyebrow">Attendance spreadsheet</p><h2>All scouts by meeting date</h2></div><p class="section-copy">Use the arrows to page through four meeting dates at a time, with the most recent window at the far right of history.</p></div><div class="panel"><div class="panel-heading"><h3>${roster.length} scouts across ${attendanceItems.length} meeting dates</h3><p>Showing ${visibleItems.length ? `${windowStart + 1}-${windowStart + visibleItems.length}` : "0"} of ${attendanceItems.length} attendance dates.</p></div><div class="attendance-window-controls"><button class="button secondary" type="button" data-attendance-window="left"${windowStart <= 0 ? " disabled" : ""}>← Earlier</button><button class="button secondary" type="button" data-attendance-window="right"${windowStart >= maxStart ? " disabled" : ""}>Later →</button></div><div class="table-wrap attendance-matrix-wrap"><table class="data-table attendance-matrix"><thead><tr><th class="attendance-name-col">Scout</th>${visibleItems.map((item) => `<th class="attendance-date-col"><span>${formatAttendanceColumnLabel(item)}</span><small>${item.title}</small></th>`).join("")}</tr></thead><tbody>${groupedByPatrol.map((group) => { const patrolScouts = sortScoutsByRankWithinPatrol(group.scouts); if (!patrolScouts.length) return ""; return `<tr class="attendance-patrol-row"><th class="attendance-patrol-header" colspan="${visibleItems.length + 1}">${getPatrolDisplayName(group.name)}</th></tr>${patrolScouts.map((scout) => { const scoutIndex = roster.findIndex((entry) => entry.id === scout.id); return `<tr><td class="attendance-name-col"><strong>${renderScoutName(scout, { className: "text-link" })}</strong><small>${scout.rank || "Rank TBD"}</small></td>${visibleItems.map((item) => { const status = getAttendanceStatusForItem(item, scout, scoutIndex); return `<td><span class="attendance-badge ${status === "Present" ? "present" : "absent"}">${status}</span></td>`; }).join("")}</tr>`; }).join("")}`; }).join("")}</tbody></table></div></div></section>`;
+  return `<section class="section"><div class="section-heading"><div><p class="eyebrow">Attendance spreadsheet</p><h2>All scouts by meeting date</h2></div><p class="section-copy">Use the arrows to page through four meeting dates at a time, with the most recent window at the far right of history.</p></div><div class="panel"><div class="panel-heading"><h3>${roster.length} scouts across ${attendanceItems.length} meeting dates</h3><p>Showing ${visibleItems.length ? `${windowStart + 1}-${windowStart + visibleItems.length}` : "0"} of ${attendanceItems.length} attendance dates.</p></div><div class="attendance-window-controls"><button class="button secondary" type="button" data-attendance-window="left"${windowStart <= 0 ? " disabled" : ""}>&larr; Earlier</button><button class="button secondary" type="button" data-attendance-window="right"${windowStart >= maxStart ? " disabled" : ""}>Later &rarr;</button></div><div class="table-wrap attendance-matrix-wrap"><table class="data-table attendance-matrix"><thead><tr><th class="attendance-name-col">Scout</th>${visibleItems.map((item) => `<th class="attendance-date-col"><span>${formatAttendanceColumnLabel(item)}</span><small>${item.title}</small></th>`).join("")}</tr></thead><tbody>${groupedByPatrol.map((group) => { const patrolScouts = sortScoutsByRankWithinPatrol(group.scouts); if (!patrolScouts.length) return ""; return `<tr class="attendance-patrol-row"><th class="attendance-patrol-header" colspan="${visibleItems.length + 1}">${getPatrolDisplayName(group.name)}</th></tr>${patrolScouts.map((scout) => { const scoutIndex = roster.findIndex((entry) => entry.id === scout.id); return `<tr><td class="attendance-name-col"><strong>${renderScoutName(scout, { className: "text-link" })}</strong><small>${scout.rank || "Rank TBD"}</small></td>${visibleItems.map((item) => { const status = getAttendanceStatusForItem(item, scout, scoutIndex); return `<td><span class="attendance-badge ${status === "Present" ? "present" : "absent"}">${status}</span></td>`; }).join("")}</tr>`; }).join("")}`; }).join("")}</tbody></table></div></div></section>`;
 }
 function renderAttendanceRowsForItem(item) { return groupedByPatrol.map((group) => `<section class="section"><div class="panel"><div class="panel-heading"><h3>${getPatrolDisplayName(group.name)}${group.name ? " Patrol" : ""}</h3><p>${group.scouts.length} scouts for this attendance item.</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Scout</th><th>Rank</th><th>Leadership</th><th>Attendance</th><th>Contacts</th></tr></thead><tbody>${group.scouts.map((scout, index) => { const status = getAttendanceStatusForItem(item, scout, index); return `<tr><td>${renderScoutName(scout, { className: "text-link" })}</td><td>${scout.rank}</td><td>${scout.leadershipRole || "-"}</td><td><span class="attendance-badge ${status === "Present" ? "present" : "absent"}">${status}</span></td><td>${scout.parents.map((parent) => `${parent.relationship}: ${parent.name}`).join("<br />")}</td></tr>`; }).join("")}</tbody></table></div></div></section>`).join(""); }
 function svgDataUri(markup) { return `data:image/svg+xml;utf8,${encodeURIComponent(markup)}`; }
 function buildLeaderBadge(title, accent, subtitle) { return svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88"><rect width="88" height="88" rx="18" fill="${accent}"/><circle cx="44" cy="28" r="16" fill="#fff" opacity=".18"/><path d="M44 17l4.8 9.6 10.6 1.5-7.7 7.5 1.8 10.5L44 41.1l-9.5 5 1.8-10.5-7.7-7.5 10.6-1.5z" fill="#fff"/><text x="44" y="63" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#fff">${title}</text><text x="44" y="76" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#fff">${subtitle}</text></svg>`); }
+function getRoleInitials(role) { return String(role || "").split(/\s+/).filter(Boolean).map((word) => word[0]).join("").slice(0, 4).toUpperCase(); }
+function getScoutLeadershipEmblem(role) {
+  const initials = getRoleInitials(role);
+  return svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88"><rect width="88" height="88" rx="18" fill="#32523d"/><circle cx="44" cy="27" r="16" fill="#f7c948"/><path d="M44 15l5.1 10.3 11.4 1.7-8.2 8 1.9 11.3L44 41l-10.2 5.3L35.7 35l-8.2-8 11.4-1.7z" fill="#fff"/><text x="44" y="67" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#fff">${initials || "L"}</text></svg>`);
+}
 const scoutOrgLogo = svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88"><rect width="88" height="88" rx="18" fill="#0b5cab"/><circle cx="44" cy="26" r="18" fill="#f7c948"/><path d="M44 15l5.4 10.8 11.9 1.7-8.6 8.4 2 11.8L44 42l-10.7 5.7 2-11.8-8.6-8.4 11.9-1.7z" fill="#0b5cab"/><text x="44" y="64" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#fff">Scout.org</text><text x="44" y="76" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#dbeafe">Official fallback</text></svg>');
 const adultLeaderEmblems = {
   "Scoutmaster": buildLeaderBadge("SM", "#174e2f", "Scoutmaster"),
@@ -649,6 +743,17 @@ const adultLeaderEmblems = {
 function getAdultLeaderEmblem(role) { return adultLeaderEmblems[role] || scoutOrgLogo; }
 function renderAdultLeaderIdentity(leader) { return `<span class="leader-identity"><img class="leader-emblem" src="${getAdultLeaderEmblem(leader.role)}" alt="${leader.role} emblem" /><span>${leader.name}</span></span>`; }
 function renderAdultLeaderLink(leader) { return `<a class="text-link leader-link" href="#/adults/${leader.adultId}" target="_blank" rel="noreferrer">${renderAdultLeaderIdentity(leader)}</a>`; }
+function renderAdultDirectoryActionCell(adult, leaderAssignment) {
+  const leaderIcon = leaderAssignment ? `<img class="leader-emblem adult-directory-leader-icon" src="${getAdultLeaderEmblem(leaderAssignment.role)}" alt="${leaderAssignment.role} emblem" title="${leaderAssignment.role}" />` : "";
+  return `<span class="adult-directory-actions"><a class="icon-button adult-edit-icon" href="#/adults/${adult.id}" aria-label="Edit ${adult.name}" title="Edit ${adult.name}">&#9998;</a>${leaderIcon}</span>`;
+}
+function renderScoutDirectoryActionCell(scout) {
+  return `<a class="icon-button scout-edit-icon" href="#/scouts/${scout.id}" aria-label="Edit ${scout.name}" title="Edit ${scout.name}">&#9998;</a>`;
+}
+function renderScoutDirectoryNameCell(scout, scoutLabel) {
+  const leaderIcon = scout.leadershipRole ? `<img class="leader-emblem scout-directory-leader-icon" src="${getScoutLeadershipEmblem(scout.leadershipRole)}" alt="${scout.leadershipRole} emblem" title="${scout.leadershipRole}" />` : `<span class="scout-directory-leader-placeholder" aria-hidden="true"></span>`;
+  return `<span class="scout-directory-name">${leaderIcon}${renderScoutName(scout, { className: "text-link", newTab: false, label: scoutLabel })}</span>`;
+}
 function buildPatrolBadge(label, accent, subtitle) { return svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88"><rect width="88" height="88" rx="18" fill="${accent}"/><circle cx="44" cy="28" r="16" fill="#fff" opacity=".18"/><path d="M25 53h38L44 20z" fill="#fff"/><text x="44" y="65" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#fff">${label}</text><text x="44" y="76" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#fff">${subtitle}</text></svg>`); }
 const patrolBadges = {
   "Python Patrol": buildPatrolBadge("PY", "#1f6f43", "Python"),
@@ -662,21 +767,18 @@ function getPatrolBadgeValue(patrol, badge = "") { return !String(patrol || "").
 function canEditScouts() { return canSeeOrgChart(); }
 function getActiveScoutId() { return window.localStorage.getItem("troop883-active-scout-id") || scouts[0]?.id || ""; }
 function setActiveScoutId(scoutId) { if (scoutId) { window.localStorage.setItem("troop883-active-scout-id", scoutId); } }
-function canEditScoutRecord(scoutId) { return canSeeOrgChart() || (modeSelect.value === "scout" && getActiveScoutId() === scoutId); }
+function canEditScoutRecord(scoutId) {
+  return canSeeOrgChart()
+    || (currentActor?.person?.externalId === scoutId || currentActor?.person?.id === scoutId)
+    || (currentActor?.relationships || []).some((relationship) => relationship.scoutPersonId === scoutId);
+}
 function getCurrentViewerIdentity() {
-  if (modeSelect.value === "public") return null;
-  if (modeSelect.value === "scout") {
-    const scout = roster.find((entry) => entry.id === getActiveScoutId());
-    return scout ? { id: `scout:${scout.id}`, name: scout.name, role: "scout" } : { id: "scout:unknown", name: "Scout", role: "scout" };
-  }
-  if (modeSelect.value === "adult-leader") {
-    const leader = adultLeaders[0];
-    return { id: `adult:${leader?.adultId || "leader"}`, name: leader?.name || "Adult leader", role: "adult-leader" };
-  }
-  if (modeSelect.value === "admin") return { id: "admin:administrator", name: "Administrator", role: "admin" };
-  if (modeSelect.value === "parent") return { id: "parent:user", name: "Parent user", role: "parent" };
-  if (modeSelect.value === "committee") return { id: "committee:user", name: "Committee member", role: "committee" };
-  return null;
+  if (!currentActor?.authenticated) return null;
+  return {
+    id: currentActor.person?.externalId || currentActor.person?.id || currentActor.account?.id || "member",
+    name: currentActor.person?.name || currentActor.account?.email || "Member",
+    role: getCurrentMode(),
+  };
 }
 function getActiveParentAdult() { return savedParentGuardians.find((adult) => getScoutsForAdult(adult).length) || savedParentGuardians[0] || null; }
 function getLinkedScoutsForCurrentParent() {
@@ -722,7 +824,7 @@ function getParentDashboardEventGroups() {
   return { linkedScouts, recent, upcoming };
 }
 function canInteractWithGallerySocial() { return Boolean(getCurrentViewerIdentity()); }
-function canModerateGalleryComments() { return modeSelect.value === "adult-leader" || modeSelect.value === "admin"; }
+function canModerateGalleryComments() { return canSeeOrgChart(); }
 function canRemoveGalleryComment(comment) { const viewer = getCurrentViewerIdentity(); return Boolean(viewer && (viewer.id === comment.authorId || canModerateGalleryComments())); }
 function formatCommentDateTime(value) { const parsed = value ? new Date(value) : null; if (!parsed || Number.isNaN(parsed.getTime())) return "Just now"; return parsed.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }); }
 function nextGalleryCommentId(image) { const used = new Set((image.comments || []).map((comment) => comment.id)); let counter = (image.comments || []).length + 1; while (used.has(`comment-${counter}`)) counter += 1; return `comment-${counter}`; }
@@ -797,6 +899,13 @@ function setPatrolBadgePreview(input) {
   const preview = row?.querySelector("[data-patrol-badge-preview]");
   if (!preview) return;
   preview.src = input.value.trim() || scoutOrgLogo;
+}
+function setScoutPatrolBadgePreview(select) {
+  const preview = document.querySelector("[data-scout-patrol-badge-preview]");
+  if (!preview) return;
+  const patrol = select?.value || "";
+  preview.src = getPatrolBadgeImage(patrol);
+  preview.alt = `${getPatrolDisplayName(patrol)} badge`;
 }
 function renderPatrolScoutChip(scout, patrolName = "") {
   return `<span class="child-chip" data-patrol-scout-chip="${scout.id}"><button class="icon-button mini" data-remove-scout-from-patrol="${scout.id}" type="button" aria-label="Remove ${scout.name} from ${patrolName || "patrol"}">x</button>${renderScoutName(scout)}</span>`;
@@ -972,7 +1081,49 @@ function findAdultByName(name) { return adults.find((adult) => adult.name.toLowe
 function getAdultLeaderAssignment(adultId) { return adultLeaders.find((leader) => leader.adultId === adultId) || null; }
 function getScoutsForAdult(adult) { const linkedScoutIds = new Set(adultScoutRelationships.filter((relationship) => relationship.adultId === adult.id).map((relationship) => relationship.scoutId)); return scouts.filter((scout) => linkedScoutIds.has(scout.id)); }
 function getAvailableScoutsForAdult(adult) { const linkedScoutIds = new Set(adultScoutRelationships.filter((relationship) => relationship.adultId === adult.id).map((relationship) => relationship.scoutId)); return scouts.filter((scout) => !linkedScoutIds.has(scout.id)).sort((a, b) => a.name.localeCompare(b.name)); }
-async function postJson(url, payload) { const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) { throw new Error(`Request failed for ${url}`); } }
+let currentActor = null;
+let sessionToken = window.localStorage.getItem("troop883-auth-token") || "";
+function authHeaders(extra = {}) { return { ...extra, ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}) }; }
+function assignedRoles() { return new Set([...(currentActor?.globalRoles || []), ...(currentActor?.unitRoles || []).map((assignment) => assignment.role)]); }
+function hasRole(role) { return assignedRoles().has(role); }
+function hasAnyRole(roles) { const currentRoles = assignedRoles(); return roles.some((role) => currentRoles.has(role)); }
+function getCurrentMode() {
+  if (hasRole("administrator")) return "admin";
+  if (hasRole("adult_leader")) return "adult-leader";
+  if (hasRole("committee_member")) return "committee";
+  if (hasRole("parent")) return "parent";
+  if (hasRole("scout")) return "scout";
+  return "public";
+}
+async function loadCurrentActor() {
+  if (!sessionToken) {
+    currentActor = null;
+    return;
+  }
+  try {
+    const response = await fetch("/auth/me", { cache: "no-store", headers: authHeaders() });
+    if (!response.ok) {
+      sessionToken = "";
+      currentActor = null;
+      window.localStorage.removeItem("troop883-auth-token");
+      return;
+    }
+    currentActor = await response.json();
+  } catch (error) {
+    sessionToken = "";
+    currentActor = null;
+    window.localStorage.removeItem("troop883-auth-token");
+  }
+}
+async function postJson(url, payload) {
+  const response = await fetch(url, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(payload) });
+  if (response.status === 401 || response.status === 403) {
+    await loadData();
+    renderAccessDenied();
+    throw new Error(`Request denied for ${url}`);
+  }
+  if (!response.ok) { throw new Error(`Request failed for ${url}`); }
+}
 async function saveScouts() { await postJson("/api/scouts", { scouts: scouts.map(serializeScout) }); }
 async function savePatrols() {
   storePatrolsSnapshot();
@@ -987,25 +1138,37 @@ async function saveAdults() { await postJson("/api/adults", { adults: adults.map
 async function saveAdultLeaders() { sortAdultLeaders(); await postJson("/api/adult-leaders", { adultLeaders: adultLeaders.map(serializeAdultLeader) }); }
 async function saveAdultScoutRelationships() { await postJson("/api/adult-scout-relationships", { adultScoutRelationships: adultScoutRelationships.map(serializeAdultScoutRelationship) }); }
 function nextAdultId() { const max = adults.reduce((highest, adult) => { const match = String(adult.id || "").match(/adult-(\d+)/); return Math.max(highest, match ? Number(match[1]) : 0); }, 0); return `adult-${max + 1}`; }
-async function loadEventData(fallbackEvents = []) { if (fallbackEvents.length) return fallbackEvents; try { const response = await fetch("/data/events.json", { cache: "no-store" }); if (!response.ok) return []; const data = await response.json(); return Array.isArray(data) ? data : []; } catch (error) { return []; } }
+async function saveHolidays() { await postJson("/api/holidays", { holidays: holidays.map(serializeHoliday) }); }
+function nextHolidayId() { const max = holidays.reduce((highest, holiday) => { const match = String(holiday.id || "").match(/holiday-(\d+)/); return Math.max(highest, match ? Number(match[1]) : 0); }, 0); return `holiday-${max + 1}`; }
+function getHolidayById(holidayId) { return holidays.find((holiday) => holiday.id === holidayId); }
+function getSortedHolidays() { return [...holidays].sort((a, b) => (parseDateKey(a.date)?.getTime() || 0) - (parseDateKey(b.date)?.getTime() || 0) || a.name.localeCompare(b.name)); }
+function formatHolidayDateRange(holiday) { if (!holiday?.date) return "Date not set"; if (!holiday.endDate || holiday.endDate === holiday.date) return formatFullDate(holiday.date); return `${formatFullDate(holiday.date)} - ${formatFullDate(holiday.endDate)}`; }
+async function loadEventData(fallbackEvents = []) { return Array.isArray(fallbackEvents) ? fallbackEvents : []; }
 async function loadData() {
   let data = {};
   let loadError = null;
 
   try {
-    const response = await fetch("/api/data", { cache: "no-store" });
+    await loadCurrentActor();
+    const response = await fetch(sessionToken ? "/api/me/dashboard" : "/api/public", { cache: "no-store", headers: authHeaders() });
     if (!response.ok) {
       throw new Error("Could not load troop data");
     }
-    data = await response.json();
+    const payload = await response.json();
+    if (payload.actor) currentActor = payload.actor;
+    data = payload.data || payload;
   } catch (error) {
     loadError = error;
+    if (!sessionToken) {
+      currentActor = null;
+    }
   }
 
   scouts = (Array.isArray(data.scouts) ? data.scouts : []).map(normalizeScout);
   adults = uniqueBy((Array.isArray(data.adults) ? data.adults : []).map(normalizeAdult), (adult) => adult.id);
   adultLeaders = (Array.isArray(data.adultLeaders) ? data.adultLeaders : []).map(normalizeAdultLeader);
   adultScoutRelationships = (Array.isArray(data.adultScoutRelationships) ? data.adultScoutRelationships : []).map(normalizeAdultScoutRelationship);
+  holidays = (Array.isArray(data.holidays) ? data.holidays : []).map(normalizeHoliday).filter((holiday) => holiday.date);
   const storedPatrols = loadStoredPatrols();
   patrols = uniqueBy(((Array.isArray(data.patrols) && data.patrols.length ? data.patrols : storedPatrols)).map(normalizePatrol).filter((patrol) => patrol.name), (patrol) => patrol.name.toLowerCase());
 
@@ -1022,36 +1185,55 @@ async function loadData() {
   }
 }
 const app = document.getElementById("app");
-const modeSelect = document.getElementById("modeSelect");
 const headerActions = document.querySelector(".header-actions");
-const savedMode = window.localStorage.getItem("troop883-view-mode");
-if (savedMode && [...modeSelect.options].some((option) => option.value === savedMode)) {
-  modeSelect.value = savedMode;
-}
-const canSeeOrgChart = () => modeSelect.value === "adult-leader" || modeSelect.value === "admin";
+const modeSelect = {
+  get value() { return getCurrentMode(); },
+  set value(value) {},
+  addEventListener() {},
+  options: [],
+};
+const canSeeOrgChart = () => hasAnyRole(["adult_leader", "administrator"]);
 function renderIdentityControls() {
-  const existing = document.querySelector("[data-scout-session]");
+  const existing = document.querySelector("[data-auth-session]");
   if (existing) existing.remove();
-  if (modeSelect.value !== "scout" || !headerActions) return;
-  const activeScoutId = getActiveScoutId();
-  const markup = `<label class="view-toggle" data-scout-session><span>Logged-in scout</span><select id="activeScoutSelect" aria-label="Select logged-in scout">${roster.map((scout) => `<option value="${scout.id}"${scout.id === activeScoutId ? " selected" : ""}>${scout.name}</option>`).join("")}</select></label>`;
+  if (!headerActions) return;
+  const viewer = getCurrentViewerIdentity();
+  const markup = viewer
+    ? `<div class="view-toggle" data-auth-session><span>${viewer.role}</span><strong>${viewer.name}</strong><button class="button secondary" type="button" data-logout>Log out</button></div>`
+    : `<details class="login-panel" data-auth-session><summary><span>Email login</span></summary><form class="view-toggle login-form" data-login-form><span>Member login</span><input type="email" data-login-email placeholder="email@example.com" aria-label="Email" autocomplete="username" /><div class="password-field"><input type="password" data-login-password placeholder="Password optional locally" aria-label="Password" autocomplete="current-password" /><button class="password-toggle" type="button" data-toggle-password aria-label="Show password">Show</button></div><input type="text" data-login-otp placeholder="MFA code" aria-label="MFA code" autocomplete="one-time-code" /><button class="button primary" type="submit">Log in</button></form></details>`;
   headerActions.insertAdjacentHTML("afterbegin", markup);
 }
-const topNav = () => { const currentHash = window.location.hash || "#/"; return `<nav class="top-nav"><a class="nav-pill${currentHash === "#/" || currentHash === "" ? " is-active" : ""}" href="#/">Home</a><a class="nav-pill${currentHash.startsWith("#/events") ? " is-active" : ""}" href="#/events">Events</a><a class="nav-pill${currentHash.startsWith("#/scribe/attendance") ? " is-active" : ""}" href="#/scribe/attendance">Scribe Attendance</a>${canEditScouts() ? `<a class="nav-pill${currentHash === "#/scouts" || currentHash.startsWith("#/scouts/") ? " is-active" : ""}" href="#/scouts">Scouts</a><a class="nav-pill${currentHash.startsWith("#/patrols") ? " is-active" : ""}" href="#/patrols">Patrols</a>` : ""}${canSeeOrgChart() ? `<a class="nav-pill${currentHash === "#/adult" || currentHash === "#/adults" || currentHash.startsWith("#/adults/") ? " is-active" : ""}" href="#/adults">Adults</a><a class="nav-pill${currentHash.startsWith("#/org-chart") ? " is-active" : ""}" href="#/org-chart">Org Chart</a>` : ""}<span class="nav-note">${canSeeOrgChart() ? "Adult-only routes include Scribe, scouts, patrol, adults, and org chart pages" : "Switch to Adult leader or Administrator to review Scribe pages and org charts"}</span></nav>`; };
+const topNav = () => { const currentHash = window.location.hash || "#/"; return `<nav class="top-nav"><a class="nav-pill${currentHash === "#/" || currentHash === "" ? " is-active" : ""}" href="#/">Home</a><a class="nav-pill${currentHash.startsWith("#/events") ? " is-active" : ""}" href="#/events">Events</a><a class="nav-pill${currentHash.startsWith("#/resources") ? " is-active" : ""}" href="#/resources">Resources</a>${currentActor?.authenticated ? `<a class="nav-pill${currentHash.startsWith("#/scribe/attendance") ? " is-active" : ""}" href="#/scribe/attendance">Scribe Attendance</a>` : ""}${canEditScouts() ? `<a class="nav-pill${currentHash === "#/scouts" || currentHash.startsWith("#/scouts/") ? " is-active" : ""}" href="#/scouts">Scouts</a><a class="nav-pill${currentHash.startsWith("#/patrols") ? " is-active" : ""}" href="#/patrols">Patrols</a>` : ""}${canSeeOrgChart() ? `<a class="nav-pill${currentHash.startsWith("#/holidays") ? " is-active" : ""}" href="#/holidays">Holidays</a><a class="nav-pill${currentHash === "#/adult" || currentHash === "#/adults" || currentHash.startsWith("#/adults/") ? " is-active" : ""}" href="#/adults">Adults</a><a class="nav-pill${currentHash.startsWith("#/org-chart") ? " is-active" : ""}" href="#/org-chart">Org Chart</a>` : ""}<span class="nav-note">${currentActor?.authenticated ? `Signed in as ${getCurrentMode()}` : "Public visitor"}</span></nav>`; };
 const renderEventCard = (event) => { const mediaItems = getDisplayMediaItems(event); return `<article class="event-card${isAdultEvent(event) ? " adult-event-theme" : ""}"><div class="image-wrap">${mediaItems.length > 1 ? `<div class="carousel" data-index="0"><div class="carousel-track">${mediaItems.map((item, index) => renderEventCardMedia(event, item, index, index === 0)).join("")}</div><button class="carousel-button prev" type="button" aria-label="Previous media">&#8249;</button><button class="carousel-button next" type="button" aria-label="Next media">&#8250;</button><div class="carousel-dots">${mediaItems.map((_, index) => `<button class="carousel-dot${index === 0 ? " is-active" : ""}" type="button" data-slide="${index}" aria-label="Go to media ${index + 1}"></button>`).join("")}</div></div>` : renderEventCardMedia(event, mediaItems[0], 0, null)}<span class="category-pill">${event.category}</span></div><div class="event-content"><p class="event-date">${event.dateLabel}</p><h3><a class="text-link" href="#/events/${event.id}">${event.title}</a></h3><p class="event-description">${event.description}</p><div class="event-meta"><span>${event.location}</span><span>${event.audience}</span></div></div></article>`; };
 const renderParentEventCard = (event, registeredScouts = []) => { const mediaItems = getDisplayMediaItems(event); return `<article class="event-card${isAdultEvent(event) ? " adult-event-theme" : ""}"><div class="image-wrap">${mediaItems.length > 1 ? `<div class="carousel" data-index="0"><div class="carousel-track">${mediaItems.map((item, index) => renderEventCardMedia(event, item, index, index === 0)).join("")}</div><button class="carousel-button prev" type="button" aria-label="Previous media">&#8249;</button><button class="carousel-button next" type="button" aria-label="Next media">&#8250;</button><div class="carousel-dots">${mediaItems.map((_, index) => `<button class="carousel-dot${index === 0 ? " is-active" : ""}" type="button" data-slide="${index}" aria-label="Go to media ${index + 1}"></button>`).join("")}</div></div>` : renderEventCardMedia(event, mediaItems[0], 0, null)}<span class="category-pill">${event.category}</span></div><div class="event-content"><p class="event-date">${event.dateLabel}</p><h3><a class="text-link" href="#/events/${event.id}">${event.title}</a></h3><p class="event-description">${event.description}</p><div class="event-meta"><span>${event.location}</span><span>${event.audience}</span></div><div class="registered-scouts"><span class="registered-scouts-label">${registeredScouts.length === 1 ? "Registered scout" : "Registered scouts"}</span>${registeredScouts.map((scout) => `<span class="registered-scout-chip">${scout.name}</span>`).join("")}</div></div></article>`; };
 const renderEventDetail = (event) => { const leadMedia = getDisplayMediaItems(event)[0] || normalizeGalleryItem({ src: event.image }, 0); return `<article class="detail-panel${isAdultEvent(event) ? " adult-event-theme" : ""}" id="${event.id}">${renderGalleryMedia(leadMedia, getGalleryDisplayTitle(event, leadMedia, 0)).replace('class="event-gallery-media"', 'class="detail-image"')}<div class="detail-body"><p class="event-date">${event.dateLabel}</p><h3>${event.title}</h3><p class="event-description">${event.description}</p><div class="event-meta"><span>${event.category}</span><span>${event.location}</span><span>${event.audience}</span></div><div class="detail-note">${event.detailNote}</div></div></article>`; };
 const renderLeadershipSummary = () => `<article class="panel"><div class="panel-heading"><h3>Leadership coverage</h3><p>Youth and adult leadership assignments loaded into the prototype.</p></div><ul class="detail-list"><li>Scout leadership positions filled: ${roster.filter((scout) => scout.leadershipRole).length}</li><li>Adult leadership positions filled: ${adultLeaders.length}</li><li><a class="text-link" href="#/org-chart">Open troop org chart</a></li></ul></article>`;
-function renderAdultScoutRosterPanel() {
+function renderAdultScoutRosterPanel({ showFilter = true } = {}) {
   const groups = groupedByPatrol.filter((group) => group.scouts.length);
-  return `<section class="section"><div class="section-heading"><div><p class="eyebrow">Scouts</p><h2>All scouts</h2></div><p class="section-copy">${roster.length} scouts grouped by current patrol assignment.</p></div><div class="scout-roster-grid">${groups.map((group) => `<article class="panel scout-roster-card"><div class="panel-heading"><h3>${getPatrolDisplayName(group.name)}${group.name ? " Patrol" : ""}</h3><p>${group.scouts.length} scout${group.scouts.length === 1 ? "" : "s"}</p></div><div class="adult-children-list">${sortScoutsByRankWithinPatrol(group.scouts).map((scout) => `<span class="child-chip scout-roster-chip">${renderScoutName(scout, { className: "text-link" })}<small>${scout.rank}${scout.leadershipRole ? ` - ${scout.leadershipRole}` : ""}</small></span>`).join("")}</div></article>`).join("")}</div></section>`;
+  const filterMarkup = showFilter ? `<div class="inline-filter"><label><span>Filter scouts</span><input type="search" data-scout-filter placeholder="Name, patrol, or rank" aria-label="Filter scouts by name, patrol, or rank" /></label><p class="section-copy" data-scout-filter-count>${roster.length} scouts grouped by current patrol assignment.</p></div>` : "";
+  return `<section class="section"><div class="section-heading"><div><p class="eyebrow">Scouts</p><div class="all-scouts-title-row"><h2>All scouts</h2>${filterMarkup}</div></div></div><div class="scout-roster-grid" data-scout-filter-scope>${groups.map((group) => { const patrolName = getPatrolDisplayName(group.name); return `<article class="panel scout-roster-card" data-scout-patrol-card data-scout-patrol="${patrolName.toLowerCase()}"><div class="panel-heading"><h3>${patrolName}${group.name ? " Patrol" : ""}</h3><p>${group.scouts.length} scout${group.scouts.length === 1 ? "" : "s"}</p></div><div class="adult-children-list">${sortScoutsForPatrolRoster(group.scouts).map((scout) => `<span class="child-chip scout-roster-chip" data-scout-filter-item data-scout-name="${scout.name.toLowerCase()}" data-scout-patrol="${patrolName.toLowerCase()}" data-scout-rank="${String(scout.rank || "").toLowerCase()}">${renderScoutName(scout, { className: "text-link" })}<small>${scout.rank}${scout.leadershipRole ? ` - ${scout.leadershipRole}` : ""}</small></span>`).join("")}</div></article>`; }).join("")}</div></section>`;
 }
 function renderScoutsRoute() {
   if (!canEditScouts()) { return renderAccessDenied(); }
-  app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scouts</p><h2>Scout records</h2><p class="intro compact">Adult leaders can review every scout, open the editable scout record, and see patrol, rank, leadership, and linked adult information.</p></div><div class="status-chip"><span>Route</span><strong>/scouts</strong></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Directory</p><h2>All scouts</h2></div><div class="scribe-actions"><a class="button secondary" href="#/patrols">Manage patrols</a><a class="button secondary" href="#/org-chart/edit-scouts">Edit scout org chart</a></div></div><div class="panel"><div class="panel-heading"><h3>${roster.length} scout records</h3><p>Open any scout to edit details, patrol assignment, and leadership position.</p></div><div class="table-wrap"><table class="data-table scout-directory-table"><thead><tr><th>Scout</th><th>Patrol</th><th>Rank</th><th>Leadership</th><th>Linked adults</th><th>Edit</th></tr></thead><tbody>${sortScoutsByRankWithinPatrol(roster).map((scout) => `<tr><td><a class="text-link" href="#/scouts/${scout.id}">${scout.name}</a></td><td>${getPatrolDisplayName(scout.patrol)}</td><td>${scout.rank}</td><td>${scout.leadershipRole || "Not assigned"}</td><td>${scout.parents.length ? `<div class="adult-children-list compact">${scout.parents.map((parent) => `<span class="child-chip"><a class="text-link" href="#/adults/${parent.adultId}">${parent.relationship}: ${parent.name}</a></span>`).join("")}</div>` : "No linked adults"}</td><td><a class="button secondary" href="#/scouts/${scout.id}">Edit</a></td></tr>`).join("")}</tbody></table></div></div></section>${renderAdultScoutRosterPanel()}`;
+  app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scouts</p><h2>Scout records</h2><p class="intro compact">Adult leaders can review every scout, open the editable scout record, and see patrol, rank, leadership, and linked adult information.</p></div><div class="status-chip"><span>Route</span><strong>/scouts</strong></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Directory</p><div class="all-scouts-title-row"><h2>All scouts</h2><div class="inline-filter"><label><span>Filter scouts</span><input type="search" data-scout-filter placeholder="Name, patrol, or rank" aria-label="Filter scouts by name, patrol, or rank" /></label><p class="section-copy" data-scout-filter-count>${roster.length} scout records</p></div></div></div><div class="directory-tools"><div class="scribe-actions"><a class="button secondary" href="#/patrols">Manage patrols</a><a class="button secondary" href="#/org-chart/edit-scouts">Edit scout org chart</a></div></div></div><div class="panel"><div class="panel-heading"><h3>${roster.length} scout records</h3><p>Open any scout to edit details, patrol assignment, and leadership position.</p></div><div class="table-wrap"><table class="data-table scout-directory-table" data-scout-filter-scope><thead><tr><th aria-label="Actions"></th><th>Scout</th><th>Patrol</th><th>Rank</th><th>Linked adults</th></tr></thead><tbody>${sortScoutsByRankWithinPatrol(roster).map((scout) => { const patrolName = getPatrolDisplayName(scout.patrol); const scoutLabel = getScoutDirectoryName(scout); return `<tr data-scout-filter-item data-scout-name="${`${scout.name} ${getScoutNickname(scout)}`.toLowerCase()}" data-scout-patrol="${patrolName.toLowerCase()}" data-scout-rank="${String(scout.rank || "").toLowerCase()}"><td>${renderScoutDirectoryActionCell(scout)}</td><td>${renderScoutDirectoryNameCell(scout, scoutLabel)}</td><td>${patrolName}</td><td>${scout.rank}</td><td>${scout.parents.length ? `<div class="adult-children-list compact">${scout.parents.map((parent) => `<span class="child-chip"><a class="text-link" href="#/adults/${parent.adultId}">${parent.relationship}: ${parent.name}</a></span>`).join("")}</div>` : "No linked adults"}</td></tr>`; }).join("")}</tbody></table></div></div></section>${renderAdultScoutRosterPanel({ showFilter: false })}`;
 }
-function renderPublic() { const sortedEvents = getSortedEvents(); const upcoming = sortedEvents.filter((event) => isUpcomingEvent(event)); const recent = sortedEvents.filter((event) => !isUpcomingEvent(event)); const nextEvent = upcoming[0] || null; const latestRecent = recent[recent.length - 1]; const featuredRecent = latestRecent ? [latestRecent] : []; const featuredUpcoming = nextEvent ? [nextEvent] : []; const priorThreeWeeks = getRollingEventList("past"); const nextThreeWeeks = getRollingEventList("future"); const nextEventLocation = nextEvent?.location || nextEvent?.homeBase || ""; app.innerHTML = `${topNav()}<section class="hero"><div class="hero-copy"><p class="eyebrow">Public landing page</p><h2>Adventure, leadership, and a troop community that families can join.</h2><p>This non-logged-in version highlights the most recent and upcoming events, presents event imagery, and invites families to explore the full event details.</p></div><div class="hero-card"><p class="hero-card-label">Next upcoming event</p><h3>${nextEvent ? `<a class="text-link" href="#/events/${nextEvent.id}">${nextEvent.title}</a>` : "No event scheduled"}</h3><p class="hero-event-meta">${nextEvent ? `${nextEvent.dateLabel} • ${nextEvent.location}` : "Check back soon for the next troop event."}</p><p>${nextEvent ? nextEvent.description : "The troop calendar is ready for the next event update."}</p>${nextEventLocation ? `<div class="hero-card-map"><div class="hero-card-map-frame"><iframe class="hero-card-map-embed" src="${mapUrlForLocation(nextEventLocation)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${nextEventLocation}"></iframe><a class="hero-card-map-overlay" href="${directionsUrlForLocation(nextEventLocation)}" target="_blank" rel="noreferrer" aria-label="Open directions to ${nextEventLocation}"><span>Directions</span></a></div><a class="hero-card-map-link" href="${directionsUrlForLocation(nextEventLocation)}" target="_blank" rel="noreferrer">Open directions to ${nextEventLocation}</a></div>` : ""}</div></section><section class="section feature-grid"><div class="feature-column" id="recent-events"><div class="section-heading"><div><p class="eyebrow">Recent</p><h2>Recent troop highlights</h2></div><p class="section-copy">A featured recent event with multiple photos.</p></div><div class="event-grid">${featuredRecent.map(renderEventCard).join("")}</div><div class="panel rolling-events"><div class="panel-heading"><h3>Previous three weeks</h3><p>Up to three recent events in descending date order.</p></div><ul class="detail-list">${priorThreeWeeks.map((event) => `<li><a class="text-link" href="#/events/${event.id}">${event.title}</a> <span class="rolling-event-date">${formatEventListDate(event)}</span></li>`).join("") || "<li>No previous events in this window.</li>"}</ul></div></div><div class="feature-column" id="upcoming-events"><div class="section-heading"><div><p class="eyebrow">Upcoming</p><h2>What is next for the troop</h2></div><p class="section-copy">The next featured upcoming event for the troop.</p></div><div class="event-grid">${featuredUpcoming.map(renderEventCard).join("")}</div><div class="panel rolling-events"><div class="panel-heading"><h3>Next three weeks</h3><p>Up to three upcoming events in date order.</p></div><ul class="detail-list">${nextThreeWeeks.map((event) => `<li><a class="text-link" href="#/events/${event.id}">${event.title}</a> <span class="rolling-event-date">${formatEventListDate(event)}</span></li>`).join("") || "<li>No upcoming events in this window.</li>"}</ul></div></div></section>`; }
-function renderDashboard(mode) { const config = dashboards[mode]; const scribePanel = canSeeOrgChart() ? `<article class="panel"><div class="panel-heading"><h3>Adult leader tools</h3><p>Prototype route family requested in the requirements.</p></div><ul class="detail-list"><li><a class="text-link" href="#/scribe/attendance">Scribe attendance</a></li><li><a class="text-link" href="#/adults">Adult records</a></li><li><a class="text-link" href="#/org-chart">Troop org chart</a></li><li><a class="text-link" href="#/org-chart/edit-scouts">Edit scout org chart</a></li><li><a class="text-link" href="#/org-chart/edit-adults">Edit adult org chart</a></li></ul></article>` : ""; const adultScoutRosterSection = canSeeOrgChart() ? renderAdultScoutRosterPanel() : ""; const parentEventGroups = mode === "parent" ? getParentDashboardEventGroups() : null; const eventPreviewSection = mode === "parent" ? `<section class="section"><div class="section-heading"><div><p class="eyebrow">Events</p><h2>Event detail preview</h2></div><p class="section-copy">${parentEventGroups?.linkedScouts?.length ? "Recent and upcoming events for the scouts linked to this parent view." : "Link a scout to this parent to show family-relevant events here."}</p></div><div class="feature-grid"><div class="feature-column"><article class="panel"><div class="panel-heading"><h3>Last three weeks</h3><p>Up to two recent events tied to your registered scouts.</p></div>${parentEventGroups?.recent?.length ? `<div class="event-grid parent-event-grid">${parentEventGroups.recent.map(({ event, registeredScouts }) => renderParentEventCard(event, registeredScouts)).join("")}</div>` : `<p class="event-description">No linked-scout events were found in the last three weeks.</p>`}</article></div><div class="feature-column"><article class="panel"><div class="panel-heading"><h3>Next eight weeks</h3><p>Upcoming events for your linked scouts, with each registered child shown on the card.</p></div>${parentEventGroups?.upcoming?.length ? `<div class="event-grid parent-event-grid">${parentEventGroups.upcoming.map(({ event, registeredScouts }) => renderParentEventCard(event, registeredScouts)).join("")}</div>` : `<p class="event-description">No linked-scout events were found in the next eight weeks.</p>`}</article></div></div></section>` : `<section class="section"><div class="section-heading"><div><p class="eyebrow">Events</p><h2>Event detail preview</h2></div><p class="section-copy">Each event includes a direct route to richer details.</p></div><div class="event-grid">${events.map(renderEventCard).join("")}</div></section>`; app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">${config.eyebrow}</p><h2>${config.title}</h2><p class="intro compact">${config.intro}</p></div><div class="status-chip"><span>Post-login destination</span><strong>Role-based dashboard</strong></div></section><section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Today</h3><p>Personalized access driven by role.</p></div><ul class="detail-list">${config.tasks.map((task) => `<li>${task}</li>`).join("")}</ul></article><article class="panel"><div class="panel-heading"><h3>Attendance decisions</h3><p>Current rules resolved from the updated requirements.</p></div><ul class="detail-list"><li>Statuses: Present, Absent</li><li>Non-regular-meeting attendance can be marked by any adult leader</li><li>Regular meeting attendance continues to support the Scribe workflow</li></ul></article><article class="panel"><div class="panel-heading"><h3>Reports</h3><p>Visibility follows access to the underlying troop data.</p></div><ul class="detail-list">${config.reports.map((report) => `<li>${report}</li>`).join("")}</ul></article><article class="panel"><div class="panel-heading"><h3>Calendar sync behavior</h3><p>Direct Google Calendar changes should flow into the site.</p></div><div class="sync-card"><div><span class="sync-label">Edited outside the site</span><strong>Reflect updated details</strong></div><div><span class="sync-label">Deleted outside the site</span><strong>Remove from the site view</strong></div></div></article>${canSeeOrgChart() ? renderLeadershipSummary() : ""}${scribePanel}</section>${adultScoutRosterSection}${eventPreviewSection}`; }
+function renderResourcesRoute() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Resources</p><h2>Downloadable troop resources</h2><p class="intro compact">Printable and editable files families can save for merit badge preparation.</p></div><div class="status-chip"><span>Route</span><strong>/resources</strong></div></section><section class="section"><div class="panel"><div class="panel-heading"><h3>Chess Merit Badge readiness checklist</h3><p>Use the PDF for printing or the Markdown file for editing.</p></div><div class="scribe-actions"><a class="button secondary" href="resources/chess_merit_badge_checklist.pdf" download>Download PDF</a><a class="button secondary" href="resources/chess_merit_badge_checklist.md" download>Download Markdown</a></div></div></section>`; }
+function renderPublic() {
+  const sortedEvents = getSortedEvents();
+  const upcoming = sortedEvents.filter((event) => isUpcomingEvent(event));
+  const recent = sortedEvents.filter((event) => !isUpcomingEvent(event));
+  const nextEvent = upcoming[0] || null;
+  const latestRecent = recent[recent.length - 1];
+  const featuredRecent = latestRecent ? [latestRecent] : [];
+  const featuredUpcoming = nextEvent ? [nextEvent] : [];
+  const previewEvents = getEventDetailPreviewEvents();
+  const priorThreeWeeks = getRollingEventList("past");
+  const nextThreeWeeks = getRollingEventList("future");
+  const nextEventLocation = nextEvent?.location || nextEvent?.homeBase || "";
+
+  app.innerHTML = `${topNav()}<section class="hero"><div class="hero-copy"><p class="eyebrow">Public landing page</p><h2>Adventure, leadership, and a troop community that families can join.</h2><p>This non-logged-in version highlights the most recent and upcoming events, presents event imagery, and invites families to explore the full event details.</p></div><div class="hero-card"><p class="hero-card-label">Next upcoming event</p><h3>${nextEvent ? `<a class="text-link" href="#/events/${nextEvent.id}">${nextEvent.title}</a>` : "No event scheduled"}</h3><p class="hero-event-meta">${nextEvent ? `${nextEvent.dateLabel} &bull; ${nextEvent.location}` : "Check back soon for the next troop event."}</p><p>${nextEvent ? nextEvent.description : "The troop calendar is ready for the next event update."}</p>${nextEventLocation ? `<div class="hero-card-map"><div class="hero-card-map-frame"><iframe class="hero-card-map-embed" src="${mapUrlForLocation(nextEventLocation)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${nextEventLocation}"></iframe><a class="hero-card-map-overlay" href="${directionsUrlForLocation(nextEventLocation)}" target="_blank" rel="noreferrer" aria-label="Open directions to ${nextEventLocation}"><span>Directions</span></a></div><a class="hero-card-map-link" href="${directionsUrlForLocation(nextEventLocation)}" target="_blank" rel="noreferrer">Open directions to ${nextEventLocation}</a></div>` : ""}</div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Events</p><h2>Event detail preview</h2></div><p class="section-copy">Two recent events and the next two upcoming events.</p></div><div class="event-grid">${previewEvents.map(renderEventCard).join("")}</div></section><section class="section feature-grid"><div class="feature-column" id="recent-events"><div class="section-heading"><div><p class="eyebrow">Recent</p><h2>Recent troop highlights</h2></div><p class="section-copy">A featured recent event with multiple photos.</p></div><div class="event-grid">${featuredRecent.map(renderEventCard).join("")}</div><div class="panel rolling-events"><div class="panel-heading"><h3>Previous three weeks</h3><p>Up to three recent events in descending date order.</p></div><ul class="detail-list">${priorThreeWeeks.map((event) => `<li><a class="text-link" href="#/events/${event.id}">${event.title}</a> <span class="rolling-event-date">${formatEventListDate(event)}</span></li>`).join("") || "<li>No previous events in this window.</li>"}</ul></div></div><div class="feature-column" id="upcoming-events"><div class="section-heading"><div><p class="eyebrow">Upcoming</p><h2>What is next for the troop</h2></div><p class="section-copy">The next featured upcoming event for the troop.</p></div><div class="event-grid">${featuredUpcoming.map(renderEventCard).join("")}</div><div class="panel rolling-events"><div class="panel-heading"><h3>Next three weeks</h3><p>Up to three upcoming events in date order.</p></div><ul class="detail-list">${nextThreeWeeks.map((event) => `<li><a class="text-link" href="#/events/${event.id}">${event.title}</a> <span class="rolling-event-date">${formatEventListDate(event)}</span></li>`).join("") || "<li>No upcoming events in this window.</li>"}</ul></div></div></section>`;
+}
+function renderDashboard(mode) { const config = dashboards[mode]; const scribePanel = canSeeOrgChart() ? `<article class="panel"><div class="panel-heading"><h3>Adult leader tools</h3><p>Prototype route family requested in the requirements.</p></div><ul class="detail-list"><li><a class="text-link" href="#/scribe/attendance">Scribe attendance</a></li><li><a class="text-link" href="#/holidays">Holiday blackouts</a></li><li><a class="text-link" href="#/adults">Adult records</a></li><li><a class="text-link" href="#/org-chart">Troop org chart</a></li><li><a class="text-link" href="#/org-chart/edit-scouts">Edit scout org chart</a></li><li><a class="text-link" href="#/org-chart/edit-adults">Edit adult org chart</a></li></ul></article>` : ""; const adultScoutRosterSection = canSeeOrgChart() ? renderAdultScoutRosterPanel() : ""; const parentEventGroups = mode === "parent" ? getParentDashboardEventGroups() : null; const eventPreviewSection = mode === "parent" ? `<section class="section"><div class="section-heading"><div><p class="eyebrow">Events</p><h2>Event detail preview</h2></div><p class="section-copy">${parentEventGroups?.linkedScouts?.length ? "Recent and upcoming events for the scouts linked to this parent view." : "Link a scout to this parent to show family-relevant events here."}</p></div><div class="feature-grid"><div class="feature-column"><article class="panel"><div class="panel-heading"><h3>Last three weeks</h3><p>Up to two recent events tied to your registered scouts.</p></div>${parentEventGroups?.recent?.length ? `<div class="event-grid parent-event-grid">${parentEventGroups.recent.map(({ event, registeredScouts }) => renderParentEventCard(event, registeredScouts)).join("")}</div>` : `<p class="event-description">No linked-scout events were found in the last three weeks.</p>`}</article></div><div class="feature-column"><article class="panel"><div class="panel-heading"><h3>Next eight weeks</h3><p>Upcoming events for your linked scouts, with each registered child shown on the card.</p></div>${parentEventGroups?.upcoming?.length ? `<div class="event-grid parent-event-grid">${parentEventGroups.upcoming.map(({ event, registeredScouts }) => renderParentEventCard(event, registeredScouts)).join("")}</div>` : `<p class="event-description">No linked-scout events were found in the next eight weeks.</p>`}</article></div></div></section>` : `<section class="section"><div class="section-heading"><div><p class="eyebrow">Events</p><h2>Event detail preview</h2></div><p class="section-copy">Each event includes a direct route to richer details.</p></div><div class="event-grid">${getEventDetailPreviewEvents().map(renderEventCard).join("")}</div></section>`; app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">${config.eyebrow}</p><h2>${config.title}</h2><p class="intro compact">${config.intro}</p></div><div class="status-chip"><span>Post-login destination</span><strong>Role-based dashboard</strong></div></section><section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Today</h3><p>Personalized access driven by role.</p></div><ul class="detail-list">${config.tasks.map((task) => `<li>${task}</li>`).join("")}</ul></article><article class="panel"><div class="panel-heading"><h3>Attendance decisions</h3><p>Current rules resolved from the updated requirements.</p></div><ul class="detail-list"><li>Statuses: Present, Absent</li><li>Non-regular-meeting attendance can be marked by any adult leader</li><li>Regular meeting attendance continues to support the Scribe workflow</li></ul></article><article class="panel"><div class="panel-heading"><h3>Reports</h3><p>Visibility follows access to the underlying troop data.</p></div><ul class="detail-list">${config.reports.map((report) => `<li>${report}</li>`).join("")}</ul></article><article class="panel"><div class="panel-heading"><h3>Calendar sync behavior</h3><p>Direct Google Calendar changes should flow into the site.</p></div><div class="sync-card"><div><span class="sync-label">Edited outside the site</span><strong>Reflect updated details</strong></div><div><span class="sync-label">Deleted outside the site</span><strong>Remove from the site view</strong></div></div></article>${canSeeOrgChart() ? renderLeadershipSummary() : ""}${scribePanel}</section>${eventPreviewSection}${adultScoutRosterSection}`; }
 function renderEventsList() { if (!canSeeOrgChart()) { renderAccessDenied(); return; } const sortedEvents = [...getSortedEvents()].reverse(); app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Events</p><h2>Editable event list</h2><p class="intro compact">Adult leaders can review the full imported schedule in one list and jump directly into any event editor.</p></div><div class="status-chip"><span>Route</span><strong>/events</strong></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Manage events</p><h2>All scheduled events</h2></div><div class="scribe-actions"><a class="button secondary" href="#/events/calendar">Open calendar view</a></div></div><div class="panel"><div class="panel-heading"><h3>${sortedEvents.length} events loaded</h3><p>Newest start date first. Use Edit to open the existing event detail editor for any row.</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Title</th><th>Dates</th><th>Category</th><th>Location</th><th>Audience</th><th>Edit</th></tr></thead><tbody>${sortedEvents.map((event) => `<tr><td>${event.title}</td><td>${event.dateLabel || "-"}</td><td>${event.category || "-"}</td><td>${event.location || "-"}</td><td>${event.audience || "-"}</td><td><a class="text-link" href="#/events/${event.id}">Edit</a></td></tr>`).join("")}</tbody></table></div></div></section>`; }
 function renderEventsIndex() {
   const selectedMonth = ensureSelectedMonth();
@@ -1082,6 +1264,7 @@ function renderEventsIndex() {
     const isSelected = dateKey === selectedDate;
     return `<div class="calendar-cell${isToday ? " is-today" : ""}${isSelected ? " is-selected" : ""}"><div class="calendar-cell-top"><button class="calendar-day-button" type="button" data-calendar-date="${dateKey}" aria-label="Open ${formatFullDate(dateKey)}">${cell.day}</button>${canSeeOrgChart() ? `<button class="icon-button add calendar-add-button" type="button" data-add-event-date="${dateKey}" aria-label="Add event on ${formatFullDate(dateKey)}">+</button>` : ""}</div><div class="calendar-events">${cell.events.map((event) => `<button class="calendar-event${selectedCalendarEvent?.id === event.id ? " is-active" : ""}${isAdultEvent(event) ? " adult-event-theme" : ""}" type="button" data-calendar-event="${event.id}" data-calendar-date="${dateKey}">${event.title}</button>`).join("")}</div></div>`;
   }).join("")}</div></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Event details</p><h2>${selectedCalendarEvent ? selectedCalendarEvent.title : "Calendar event details"}</h2></div><p class="section-copy">${selectedCalendarEvent ? "This panel updates when you choose a different event from the calendar." : "Select an event from the calendar to review the key details without leaving the page."}</p></div>${renderCalendarEventShowcase(selectedCalendarEvent)}</section><section class="section feature-grid"><div class="feature-column"><article class="panel"><div class="panel-heading"><h3>${formatFullDate(selectedDate)}</h3><p>${selectedDateEvents.length ? `${selectedDateEvents.length} event${selectedDateEvents.length === 1 ? "" : "s"} scheduled` : "No events are scheduled for this date yet."}</p></div>${selectedDateEvents.length ? `<div class="detail-stack">${selectedDateEvents.map(renderCalendarExpandableEvent).join("")}</div>` : `<p class="event-description">Choose another day, or ${canSeeOrgChart() ? "use the plus button in the calendar grid to insert a new event on this date." : "check another month for more troop activity."}</p>`}</article></div><div class="feature-column"><article class="panel"><div class="panel-heading"><h3>${formatMonthLabel(selectedMonth)} overview</h3><p>${monthEvents.length} event${monthEvents.length === 1 ? "" : "s"} currently visible this month.</p></div><div class="detail-stack">${monthEvents.map(renderCalendarExpandableEvent).join("") || `<article class="month-summary-card"><p class="event-description">No events are loaded for this month yet.</p></article>`}</div></article></div></section>`;
+  flushSelectedCalendarEventScroll();
 }
 function renderEventRoute(eventId) {
   const event = getEventById(eventId);
@@ -1108,24 +1291,126 @@ function renderScribeIndex() { if (canSeeOrgChart()) { app.innerHTML = `${topNav
 function renderScribeEvent() { app.innerHTML = `${topNav()}<section class="section-heading"><div><p class="eyebrow">Scribe attendance</p><h2>Regular Meeting: STEM Challenge Night</h2></div><p class="section-copy">Scouts grouped by patrol with Unassigned support available when needed.</p></section><div class="scribe-actions"><a class="button secondary" href="#/scribe/attendance/print">Print sheet</a><a class="button secondary" href="#/scribe/attendance/upload">Upload completed sheet</a><a class="button secondary" href="#/scribe/attendance/history">View history</a></div>${groupedByPatrol.map((group) => `<section class="section"><div class="panel"><div class="panel-heading"><h3>${getPatrolDisplayName(group.name)}${group.name ? " Patrol" : ""}</h3><p>${group.scouts.length} scouts</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Scout</th><th>Gender</th><th>Rank</th><th>Leadership</th><th>Attendance</th><th>Contacts</th></tr></thead><tbody>${group.scouts.map((scout) => `<tr><td>${renderScoutName(scout, { className: "text-link" })}</td><td>${scout.gender}</td><td>${scout.rank}</td><td>${scout.leadershipRole || "-"}</td><td><span class="attendance-badge ${scout.attendance === "Present" ? "present" : "absent"}">${scout.attendance}</span></td><td>${scout.parents.map((parent) => `${parent.relationship}: ${parent.name}`).join("<br />")}</td></tr>`).join("")}</tbody></table></div></div></section>`).join("")}`; }
 function renderScribePrint() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scribe print view</p><h2>Printable attendance sheet</h2><p class="intro compact">A simple meeting-date roster grouped by patrol with a check-in or initials column.</p></div><div class="status-chip"><span>Route</span><strong>/scribe/attendance/:eventId/print</strong></div></section>${groupedByPatrol.map((group) => `<section class="section"><div class="panel print-sheet"><div class="panel-heading"><h3>${getPatrolDisplayName(group.name)}${group.name ? " Patrol" : ""}</h3><p>Meeting date: Apr 8, 2026</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Name</th><th>Leadership</th><th>Initials / Check-in</th></tr></thead><tbody>${group.scouts.map((scout) => `<tr><td>${renderScoutName(scout, { className: "text-link" })}</td><td>${scout.leadershipRole || "-"}</td><td class="blank-cell"></td></tr>`).join("")}</tbody></table></div></div></section>`).join("")}`; }
 function renderScribeUpload() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scribe upload</p><h2>Upload completed attendance sheets</h2><p class="intro compact">Prototype workflow: upload sheet, parse initials/checkmarks, review matches, then confirm save.</p></div><div class="status-chip"><span>Route</span><strong>/scribe/attendance/:eventId/upload</strong></div></section><section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Workflow</h3><p>Recommended MVP review flow.</p></div><ol class="detail-list"><li>Upload one or more completed attendance sheets</li><li>Parse initials and checkmarks</li><li>Review proposed matches against scouts</li><li>Confirm final save</li></ol></article><article class="panel"><div class="panel-heading"><h3>Sample parsed rows</h3><p>Preview of a manual review screen.</p></div><ul class="detail-list"><li>Aiden Carter -> Present</li><li>Maya Thompson -> Present</li><li>Ezra Peterson -> Absent</li><li>Quinn Foster -> Present</li></ul></article></section>`; }
-function renderScribeHistory() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scribe history</p><h2>Attendance history visibility</h2><p class="intro compact">History is visible to the Scribe, Adult Scout Leaders, and Administrators. Click a month to expand a tree view of that month’s attendance items, then open an item to see the full attendance details.</p></div><div class="status-chip"><span>Route</span><strong>/scribe/attendance/history</strong></div></section><section class="section"><div class="table-wrap"><table class="data-table history-table"><thead><tr><th>Month</th><th>Present</th><th>Absent</th><th>Visible to</th></tr></thead><tbody>${attendanceHistory.map((row) => `${`<tr class="history-month-row" data-toggle-attendance-month="${row.id}"><td><span class="tree-toggle">${expandedAttendanceMonths.has(row.id) ? "▾" : "▸"}</span>${row.month}</td><td>${row.present}</td><td>${row.absent}</td><td>Scribe, Adult Scout Leaders, Administrators</td></tr>`}${expandedAttendanceMonths.has(row.id) ? row.items.map((item) => `<tr class="history-child-row"><td colspan="4"><a class="history-item-tree" href="#/scribe/attendance/history/item/${item.id}"><span class="tree-branch">↳</span><span><strong>${item.title}</strong><small>${item.dateLabel} • Present: ${item.present} • Absent: ${item.absent}</small></span></a></td></tr>`).join("") : ""}`).join("")}</tbody></table></div></section>`; }
+function renderScribeHistory() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scribe history</p><h2>Attendance history visibility</h2><p class="intro compact">History is visible to the Scribe, Adult Scout Leaders, and Administrators. Click a month to expand a tree view of that month’s attendance items, then open an item to see the full attendance details.</p></div><div class="status-chip"><span>Route</span><strong>/scribe/attendance/history</strong></div></section><section class="section"><div class="table-wrap"><table class="data-table history-table"><thead><tr><th>Month</th><th>Present</th><th>Absent</th><th>Visible to</th></tr></thead><tbody>${attendanceHistory.map((row) => `${`<tr class="history-month-row" data-toggle-attendance-month="${row.id}"><td><span class="tree-toggle">${expandedAttendanceMonths.has(row.id) ? "&#9662;" : "&#9656;"}</span>${row.month}</td><td>${row.present}</td><td>${row.absent}</td><td>Scribe, Adult Scout Leaders, Administrators</td></tr>`}${expandedAttendanceMonths.has(row.id) ? row.items.map((item) => `<tr class="history-child-row"><td colspan="4"><a class="history-item-tree" href="#/scribe/attendance/history/item/${item.id}"><span class="tree-branch">&#9492;</span><span><strong>${item.title}</strong><small>${item.dateLabel} • Present: ${item.present} • Absent: ${item.absent}</small></span></a></td></tr>`).join("") : ""}`).join("")}</tbody></table></div></section>`; }
 function renderScribeHistoryItem(itemId) { const item = getAttendanceHistoryItem(itemId); if (!item) { renderNotFound(); return; } app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Attendance item</p><h2>${item.title}</h2><p class="intro compact">Detailed attendance view for the selected item in ${item.month}.</p></div><div class="status-chip"><span>Route</span><strong>/scribe/attendance/history/item/${item.id}</strong></div></section><div class="scribe-actions"><a class="button secondary" href="#/scribe/attendance/history">Back to history</a>${item.eventId ? `<a class="button secondary" href="#/events/${item.eventId}">Open event page</a>` : ""}</div><section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Attendance summary</h3><p>${item.dateLabel}</p></div><ul class="detail-list"><li>Present: ${item.present}</li><li>Absent: ${item.absent}</li><li>Month: ${item.month}</li></ul></article><article class="panel"><div class="panel-heading"><h3>Visibility</h3><p>Who can view this attendance item.</p></div><ul class="detail-list"><li>Scribe</li><li>Adult Scout Leaders</li><li>Administrators</li></ul></article></section>${renderAttendanceRowsForItem(item)}`; }
 function renderScribeMonthly() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Monthly report</p><h2>Regular meeting attendance by month</h2><p class="intro compact">Current members only, grouped by current patrol membership, with patrol-less scouts appearing in Unassigned when needed.</p></div><div class="status-chip"><span>Route</span><strong>/scribe/attendance/reports/monthly</strong></div></section><section class="section dashboard-grid">${attendanceHistory.map((row) => `<article class="panel"><div class="panel-heading"><h3>${row.month}</h3><p>Org-chart grouped attendance snapshot</p></div><ul class="detail-list"><li>Present: ${row.present}</li><li>Absent: ${row.absent}</li><li>Current members only</li></ul></article>`).join("")}</section><section class="section"><div class="panel"><div class="panel-heading"><h3>Loaded scout roster</h3><p>${roster.length} scouts with linked parent/guardian contacts and leadership assignments.</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Scout</th><th>Patrol</th><th>Gender</th><th>Rank</th><th>Leadership</th><th>Parent / Guardian 1</th><th>Parent / Guardian 2</th></tr></thead><tbody>${roster.map((scout) => `<tr><td>${renderScoutName(scout, { className: "text-link" })}</td><td>${getPatrolDisplayName(scout.patrol)}</td><td>${scout.gender}</td><td>${scout.rank}</td><td>${scout.leadershipRole || "-"}</td><td>${scout.parents[0]?.name || "-"}</td><td>${scout.parents[1]?.name || "-"}</td></tr>`).join("")}</tbody></table></div></div></section>`; }
 function renderOrgChart() { if (!canSeeOrgChart()) { return renderAccessDenied(); } const troopYouthMembers = getTroopYouthLeadershipMembers(); const patrolLeadershipGroups = getPatrolLeadershipGroups(); app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Org chart</p><h2>Troop 883 leadership structure</h2><p class="intro compact">Adult leaders can review both the youth leadership chain and the adult leadership/committee structure from one route.</p></div><div class="status-chip"><span>Route</span><strong>/org-chart</strong></div></section><section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Edit org chart</h3><p>Manage leadership assignments from dedicated edit routes.</p></div><div class="scribe-actions"><a class="button secondary" href="#/org-chart/edit-scouts">Edit scout org chart</a><a class="button secondary" href="#/org-chart/edit-adults">Edit adult org chart</a></div></article></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Scout leadership</p><h2>Youth leadership org chart</h2></div><p class="section-copy">Patrol leaders and troop youth officers are assigned from the active scout roster.</p></div><div class="org-grid scout-org-grid"><article class="panel"><div class="panel-heading"><h3>Troop youth leadership</h3><p>${troopYouthMembers.length} assigned scouts in leadership order.</p></div><div class="org-stack troop-leadership-stack">${troopYouthMembers.map(renderTroopYouthLeadershipCard).join("")}</div></article><article class="panel"><div class="panel-heading"><h3>Patrol leadership</h3><p>${patrolLeadershipGroups.length} patrol leadership teams grouped by patch.</p></div><div class="patrol-leadership-grid">${patrolLeadershipGroups.map(renderPatrolLeadershipCard).join("")}</div></article></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Adult leadership</p><h2>Adult org chart</h2></div><p class="section-copy">Adult positions include program-side and committee-side reporting lines, with role emblems shown beside each leader.</p></div><div class="org-grid"><article class="panel"><div class="panel-heading"><h3>Program leadership</h3><p>Scout-facing adult leaders</p></div><div class="org-stack">${adultLeaders.filter((leader) => ["Scoutmaster", "Assistant Scoutmaster"].includes(leader.role)).map((leader) => `<div class="org-card"><strong>${leader.role}</strong>${renderAdultLeaderIdentity(leader)}<small>Reports to: ${defaultReportsTo(leader.role)}</small></div>`).join("")}</div></article><article class="panel"><div class="panel-heading"><h3>Committee leadership</h3><p>Administrative and support roles</p></div><div class="org-stack">${adultLeaders.filter((leader) => !["Scoutmaster", "Assistant Scoutmaster"].includes(leader.role)).map((leader) => `<div class="org-card"><strong>${leader.role}</strong>${renderAdultLeaderIdentity(leader)}<small>Reports to: ${defaultReportsTo(leader.role)}</small></div>`).join("")}</div></article></div></section>`; }
-function renderAdultOrgChartEditor() { if (!canSeeOrgChart()) { return renderAccessDenied(); } const availableAdults = getAvailableAdultsForLeadership(); app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Edit adult org chart</p><h2>Adult leadership assignments</h2><p class="intro compact">Adult assignments save back to CSV when a control loses focus or an add/remove action is completed.</p></div><div class="status-chip"><span>Route</span><strong>/org-chart/edit-adults</strong></div></section><section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Current adult assignments</h3><p>The Adult column opens the linked adult record in a new tab. The Current role dropdown saves on blur. Use the plus icon to add another adult leader from saved adults, or type a brand-new adult name.</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Adult</th><th>Current role</th><th>Remove</th></tr></thead><tbody>${adultLeaders.map((leader, index) => `<tr><td>${renderAdultLeaderLink(leader)}</td><td><select data-adult-role-index="${index}" aria-label="Change role for ${leader.name}">${adultRoleOptions.map((role) => `<option value="${role}"${role === leader.role ? " selected" : ""}>${role}</option>`).join("")}</select></td><td><button class="icon-button" data-remove-adult-index="${index}" type="button" aria-label="Remove ${leader.name} from adult leaders">&times;</button></td></tr>`).join("")}${showAddAdultRow ? `<tr><td><span class="leader-identity"><img class="leader-emblem" src="${scoutOrgLogo}" alt="Scout.org logo" /><input type="text" data-add-adult-input list="available-adult-options" placeholder="Start typing an adult name" aria-label="Choose or enter adult leader" /><datalist id="available-adult-options">${availableAdults.map((adult) => `<option value="${adult.name}"></option>`).join("")}</datalist></span></td><td><select data-add-adult-role aria-label="Choose role for new adult leader">${adultRoleOptions.map((role) => `<option value="${role}"${role === "Committee Member" ? " selected" : ""}>${role}</option>`).join("")}</select></td><td><button class="icon-button add" data-cancel-add-adult type="button" aria-label="Cancel adding adult leader">&times;</button></td></tr>` : `<tr><td><button class="icon-button add" data-show-add-adult type="button" aria-label="Add adult leader">+</button></td><td colspan="2">Add adult leader from saved adults or type a new adult name</td></tr>`}</tbody></table></div></article></section><section class="section"><div class="panel"><div class="panel-heading"><h3>Add new adult</h3><p>New adults are saved to the master adult list so they can later be selected as parents/guardians or adult leaders.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Name</th><th>Relationship</th><th>Email</th><th>Add</th></tr></thead><tbody><tr><td><input type="text" data-new-adult-name placeholder="Adult name" /></td><td><select data-new-adult-relationship><option value="Adult leader">Adult leader</option><option value="Parent">Parent</option><option value="Guardian">Guardian</option><option value="Committee Member">Committee Member</option></select></td><td><input type="email" data-new-adult-email placeholder="adult@example.com" /></td><td><button class="icon-button add" data-save-new-adult type="button" aria-label="Save new adult">+</button></td></tr></tbody></table></div><p class="section-copy">Saved adults: ${getSavedAdultPeople().map((adult) => adult.name).join(", ")}</p></div></section>`; }
+function renderAdultOrgChartEditor() { if (!canSeeOrgChart()) { return renderAccessDenied(); } const availableAdults = getAvailableAdultsForLeadership(); app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Edit adult org chart</p><h2>Adult leadership assignments</h2><p class="intro compact">Adult assignments save back to CSV when a control loses focus or an add/remove action is completed.</p></div><div class="status-chip"><span>Route</span><strong>/org-chart/edit-adults</strong></div></section><section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Current adult assignments</h3><p>The Adult column opens the linked adult record in a new tab. The Current role dropdown saves on blur. Use the plus icon to add another adult leader from saved adults, or type a brand-new adult name.</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Adult</th><th>Current role</th><th>Remove</th></tr></thead><tbody>${adultLeaders.map((leader, index) => `<tr><td>${renderAdultLeaderLink(leader)}</td><td><select data-adult-role-index="${index}" aria-label="Change role for ${leader.name}">${adultRoleOptions.map((role) => `<option value="${role}"${role === leader.role ? " selected" : ""}>${role}</option>`).join("")}</select></td><td><button class="icon-button" data-remove-adult-index="${index}" type="button" aria-label="Remove ${leader.name} from adult leaders">&times;</button></td></tr>`).join("")}${showAddAdultRow ? `<tr><td><span class="leader-identity"><img class="leader-emblem" src="${scoutOrgLogo}" alt="Scout.org logo" /><input type="text" data-add-adult-input list="available-adult-options" placeholder="Start typing an adult name" aria-label="Choose or enter adult leader" /><datalist id="available-adult-options">${availableAdults.map((adult) => `<option value="${adult.name}"></option>`).join("")}</datalist></span></td><td><select data-add-adult-role aria-label="Choose role for new adult leader">${adultRoleOptions.map((role) => `<option value="${role}"${role === "Committee Member" ? " selected" : ""}>${role}</option>`).join("")}</select></td><td><button class="icon-button add" data-cancel-add-adult type="button" aria-label="Cancel adding adult leader">&times;</button></td></tr>` : `<tr><td><button class="icon-button add" data-show-add-adult type="button" aria-label="Add adult leader">+</button></td><td colspan="2">Add adult leader from saved adults or type a new adult name</td></tr>`}</tbody></table></div></article></section><section class="section"><div class="panel"><div class="panel-heading"><h3>Add new adult</h3><p>New adults are saved to the master adult list so they can later be selected as parents/guardians or adult leaders.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Name</th><th>Relationship</th><th>Email</th><th>Home phone</th><th>Cell phone</th><th>Add</th></tr></thead><tbody><tr><td><input type="text" data-new-adult-name placeholder="Adult name" /></td><td><select data-new-adult-relationship><option value="Adult leader">Adult leader</option><option value="Parent">Parent</option><option value="Guardian">Guardian</option><option value="Committee Member">Committee Member</option></select></td><td><input type="email" data-new-adult-email placeholder="adult@example.com" /></td><td><input type="tel" data-new-adult-home-phone placeholder="Home phone" /></td><td><input type="tel" data-new-adult-cell-phone placeholder="Cell phone" /></td><td><button class="icon-button add" data-save-new-adult type="button" aria-label="Save new adult">+</button></td></tr></tbody></table></div><p class="section-copy">Saved adults: ${getSavedAdultPeople().map((adult) => adult.name).join(", ")}</p></div></section>`; }
 function renderAdultsRoute(routeLabel = "/adults") {
   if (!canSeeOrgChart()) { return renderAccessDenied(); }
   const sortedAdults = getSavedAdultPeople();
-  app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Adults</p><h2>Adult records</h2><p class="intro compact">Adult leaders can review every adult, open their editable record, manage linked children, and assign a leadership position.</p></div><div class="status-chip"><span>Route</span><strong>${routeLabel}</strong></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Directory</p><h2>All adults</h2></div><div class="scribe-actions"><a class="button secondary" href="#/org-chart/edit-adults">Add adult leader</a></div></div><div class="panel"><div class="panel-heading"><h3>${sortedAdults.length} adult records</h3><p>Open any adult to edit contact information, linked scouts, and leadership assignment.</p></div><div class="table-wrap"><table class="data-table adult-directory-table"><thead><tr><th>Adult</th><th>Relationship</th><th>Email</th><th>Leadership position</th><th>Children</th><th>Edit</th></tr></thead><tbody>${sortedAdults.map((adult) => { const leaderAssignment = getAdultLeaderAssignment(adult.id); const linkedScouts = getScoutsForAdult(adult); return `<tr><td><a class="text-link" href="#/adults/${adult.id}">${adult.name}</a></td><td>${adult.relationship}</td><td>${adult.email || "-"}</td><td>${leaderAssignment?.role || "Not assigned"}</td><td>${linkedScouts.length ? `<div class="adult-children-list compact">${linkedScouts.map((scout) => `<span class="child-chip">${renderScoutName(scout, { className: "text-link" })}</span>`).join("")}</div>` : "No linked scouts"}</td><td><a class="button secondary" href="#/adults/${adult.id}">Edit</a></td></tr>`; }).join("")}</tbody></table></div></div></section>`;
+  app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Adults</p><h2>Adult records</h2><p class="intro compact">Adult leaders can review every adult, open their editable record, manage linked children, and assign a leadership position.</p></div><div class="status-chip"><span>Route</span><strong>${routeLabel}</strong></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Directory</p><h2>All adults</h2></div><div class="scribe-actions"><a class="button secondary" href="#/org-chart/edit-adults">Add adult leader</a></div></div><div class="panel"><div class="panel-heading"><h3>${sortedAdults.length} adult records</h3><p>Open any adult to edit contact information, linked scouts, and leadership assignment.</p></div><div class="table-wrap"><table class="data-table adult-directory-table"><thead><tr><th aria-label="Actions"></th><th>Adult</th><th>Contact</th><th>Leadership position</th><th>Children</th></tr></thead><tbody>${sortedAdults.map((adult) => { const leaderAssignment = getAdultLeaderAssignment(adult.id); const linkedScouts = getScoutsForAdult(adult); const phoneNumbers = [[adult.homePhone, "(h)"], [adult.cellPhone, "(m)"]].filter(([phone]) => phone).map(([phone, label]) => `${phone} ${label}`).join(" "); return `<tr><td>${renderAdultDirectoryActionCell(adult, leaderAssignment)}</td><td><a class="text-link" href="#/adults/${adult.id}">${adult.name}</a></td><td><div class="contact-stack"><span>${adult.email || "-"}</span><span>${phoneNumbers || "-"}</span></div></td><td>${leaderAssignment?.role || "Not assigned"}</td><td>${linkedScouts.length ? `<div class="adult-children-list compact">${linkedScouts.map((scout) => `<span class="child-chip">${renderScoutName(scout, { className: "text-link" })}</span>`).join("")}</div>` : "No linked scouts"}</td></tr>`; }).join("")}</tbody></table></div></div></section>`;
 }
-function renderAdultRecordEditor(adultId) { const adult = adults.find((entry) => entry.id === adultId); if (!adult) { renderNotFound(); return; } const leaderAssignment = getAdultLeaderAssignment(adult.id); const linkedScouts = getScoutsForAdult(adult); const availableScouts = getAvailableScoutsForAdult(adult); app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Adult record</p><h2>${adult.name}</h2><p class="intro compact">Update the adult record here. Changes save back to the master adults list when a field loses focus.</p></div><div class="status-chip"><span>Route</span><strong>/adults/${adult.id}</strong></div></section><section class="section"><div class="panel"><div class="panel-heading"><h3>Adult details</h3><p>This record is linked to leadership assignments, parent/guardian references, and future troop access decisions.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Name</td><td><input type="text" data-adult-edit-name value="${adult.name}" aria-label="Adult name" /></td></tr><tr><td>Email</td><td><input type="email" data-adult-edit-email value="${adult.email}" aria-label="Adult email" /></td></tr><tr><td>Adult leader position</td><td>${canSeeOrgChart() ? `<select data-adult-edit-role aria-label="Adult leader position"><option value="">Not assigned</option>${adultRoleOptions.map((role) => `<option value="${role}"${leaderAssignment?.role === role ? " selected" : ""}>${role}</option>`).join("")}</select>` : `${leaderAssignment?.role || "Not assigned"}`}</td></tr><tr><td>Children</td><td>${linkedScouts.length ? `<div class="adult-children-list">${linkedScouts.map((scout) => `<span class="child-chip">${renderScoutName(scout)}${canSeeOrgChart() ? ` <button class="icon-button mini" data-remove-child-scout="${scout.id}" type="button" aria-label="Remove ${scout.name} from ${adult.name}'s children">&times;</button>` : ""}</span>`).join("")}</div>` : `No linked scouts`}${canSeeOrgChart() ? `<div class="adult-child-add"><select data-add-child-scout aria-label="Select scout to add as child"><option value="">Select scout</option>${availableScouts.map((scout) => `<option value="${scout.id}">${scout.name}</option>`).join("")}</select><button class="icon-button add" data-save-child-link type="button" aria-label="Add selected scout as child">+</button></div>` : ""}</td></tr></tbody></table></div></div></section>`; }
+function renderAdultRecordEditor(adultId) { const adult = adults.find((entry) => entry.id === adultId); if (!adult) { renderNotFound(); return; } const leaderAssignment = getAdultLeaderAssignment(adult.id); const linkedScouts = getScoutsForAdult(adult); const availableScouts = getAvailableScoutsForAdult(adult); app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Adult record</p><h2>${adult.name}</h2><p class="intro compact">Update the adult record here. Changes save back to the master adults list when a field loses focus.</p></div><div class="status-chip"><span>Route</span><strong>/adults/${adult.id}</strong></div></section><section class="section"><div class="panel"><div class="panel-heading"><h3>Adult details</h3><p>This record is linked to leadership assignments, parent/guardian references, and future troop access decisions.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Name</td><td><input type="text" data-adult-edit-name value="${adult.name}" aria-label="Adult name" /></td></tr><tr><td>Email</td><td><input type="email" data-adult-edit-email value="${adult.email}" aria-label="Adult email" /></td></tr><tr><td>Home phone</td><td><input type="tel" data-adult-edit-home-phone value="${adult.homePhone || ""}" aria-label="Adult home phone number" /></td></tr><tr><td>Cell phone</td><td><input type="tel" data-adult-edit-cell-phone value="${adult.cellPhone || ""}" aria-label="Adult cell phone number" /></td></tr><tr><td>Adult leader position</td><td>${canSeeOrgChart() ? `<select data-adult-edit-role aria-label="Adult leader position"><option value="">Not assigned</option>${adultRoleOptions.map((role) => `<option value="${role}"${leaderAssignment?.role === role ? " selected" : ""}>${role}</option>`).join("")}</select>` : `${leaderAssignment?.role || "Not assigned"}`}</td></tr><tr><td>Children</td><td>${linkedScouts.length ? `<div class="adult-children-list">${linkedScouts.map((scout) => `<span class="child-chip">${renderScoutName(scout)}${canSeeOrgChart() ? ` <button class="icon-button mini" data-remove-child-scout="${scout.id}" type="button" aria-label="Remove ${scout.name} from ${adult.name}'s children">&times;</button>` : ""}</span>`).join("")}</div>` : `No linked scouts`}${canSeeOrgChart() ? `<div class="adult-child-add"><select data-add-child-scout aria-label="Select scout to add as child"><option value="">Select scout</option>${availableScouts.map((scout) => `<option value="${scout.id}">${scout.name}</option>`).join("")}</select><button class="icon-button add" data-save-child-link type="button" aria-label="Add selected scout as child">+</button></div>` : ""}</td></tr></tbody></table></div></div></section>`; }
+function renderHolidayRows() {
+  const sortedHolidays = getSortedHolidays();
+  if (!sortedHolidays.length) {
+    return `<tr><td colspan="6">No holiday blackout dates are stored yet.</td></tr>`;
+  }
+  return sortedHolidays.map((holiday) => `<tr><td><a class="text-link" href="#/holidays/${holiday.id}">${holiday.name}</a></td><td>${formatHolidayDateRange(holiday)}</td><td>${holiday.placedBy || "-"}</td><td>${holiday.role || "-"}</td><td>${holiday.note || "-"}</td><td><div class="table-action-row"><a class="text-link" href="#/holidays/${holiday.id}">View</a>${canSeeOrgChart() ? `<button class="icon-button mini" data-delete-holiday="${holiday.id}" type="button" aria-label="Remove ${holiday.name}">&times;</button>` : ""}</div></td></tr>`).join("");
+}
+function renderHolidaysRoute() {
+  const sortedHolidays = getSortedHolidays();
+  app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Holidays</p><h2>Holiday blackout dates</h2><p class="intro compact">Custom holidays and closure dates mark days when scouting events should not be scheduled.</p></div><div class="status-chip"><span>Route</span><strong>/holidays</strong></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Custom holiday table</p><h2>${sortedHolidays.length} stored blackout date${sortedHolidays.length === 1 ? "" : "s"}</h2></div>${canSeeOrgChart() ? `<div class="scribe-actions"><a class="button secondary" href="#/holidays/new">Add custom holiday</a></div>` : ""}</div><div class="panel"><div class="panel-heading"><h3>Dates without scouting events</h3><p>${canSeeOrgChart() ? "Use this list to keep holidays and other custom no-event dates visible to adult schedulers." : "Sign in as an adult leader or administrator to add, edit, or remove blackout dates."}</p></div><div class="table-wrap"><table class="data-table holiday-table"><thead><tr><th>Holiday</th><th>Date range</th><th>Placed by</th><th>Role</th><th>Note</th><th>Actions</th></tr></thead><tbody>${renderHolidayRows()}</tbody></table></div></div></section>`;
+}
+function renderHolidayEditor(holidayId) {
+  const isNew = holidayId === "new";
+  if (isNew && !canSeeOrgChart()) { return renderAccessDenied(); }
+  const holiday = isNew ? normalizeHoliday({ id: nextHolidayId(), date: getTodayDateKey(), endDate: getTodayDateKey(), role: modeSelect.value === "admin" ? "Administrator" : "Adult leader" }) : getHolidayById(holidayId);
+  if (!holiday) { renderNotFound(); return; }
+  const canManage = canSeeOrgChart();
+  app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Holiday record</p><h2>${isNew ? "Add custom holiday" : holiday.name}</h2><p class="intro compact">These blackout dates are intended for days when troop events should not be created.</p></div><div class="status-chip"><span>Route</span><strong>/holidays/${isNew ? "new" : holiday.id}</strong></div></section><section class="section"><div class="panel"><div class="panel-heading"><h3>${isNew ? "New holiday" : "Holiday details"}</h3><p>${canManage ? (isNew ? "Enter the custom holiday details, then save it to the holiday table." : "Edit the holiday details, or remove this blackout date from the table.") : "Sign in as an adult leader or administrator to edit this blackout date."}</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Name</td><td>${canManage ? `<input type="text" data-holiday-name value="${holiday.name}" aria-label="Holiday name" />` : holiday.name}</td></tr><tr><td>Start date</td><td>${canManage ? `<input type="date" data-holiday-date value="${holiday.date}" aria-label="Holiday start date" />` : formatFullDate(holiday.date)}</td></tr><tr><td>End date</td><td>${canManage ? `<input type="date" data-holiday-end-date value="${holiday.endDate || holiday.date}" aria-label="Holiday end date" />` : formatFullDate(holiday.endDate || holiday.date)}</td></tr><tr><td>Placed by</td><td>${canManage ? `<input type="text" data-holiday-placed-by value="${holiday.placedBy}" placeholder="Adult leader or administrator name" aria-label="Placed by" />` : (holiday.placedBy || "-")}</td></tr><tr><td>Role</td><td>${canManage ? `<select data-holiday-role aria-label="Holiday placer role"><option value="Adult leader"${holiday.role === "Adult leader" ? " selected" : ""}>Adult leader</option><option value="Administrator"${holiday.role === "Administrator" ? " selected" : ""}>Administrator</option></select>` : (holiday.role || "-")}</td></tr><tr><td>Note</td><td>${canManage ? `<textarea data-holiday-note aria-label="Holiday note">${holiday.note}</textarea>` : (holiday.note || "-")}</td></tr></tbody></table></div><div class="holiday-editor-actions"><a class="button secondary" href="#/holidays">Back to holidays</a>${canManage ? `<button class="button primary" data-save-holiday="${holiday.id}" data-holiday-new="${isNew}" type="button">Save holiday</button>${isNew ? "" : `<button class="button danger" data-delete-holiday="${holiday.id}" type="button">Remove holiday</button>`}` : ""}</div></div></section>`;
+}
 function renderScoutOrgChartEditor() { if (!canEditScouts()) { return renderAccessDenied(); } app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Edit scout org chart</p><h2>Scout leadership assignments</h2><p class="intro compact">This editor route is limited to adult leaders and administrators and is the entry point for changing patrol and youth leadership assignments.</p></div><div class="status-chip"><span>Route</span><strong>/org-chart/edit-scouts</strong></div></section><section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Linked parents and guardians</h3><p>Scout records pull parent and guardian links from the separate relationship list, so edits stay available from either the adult or scout side.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Saved parent/guardian</th><th>Relationship</th><th>Email</th></tr></thead><tbody>${savedParentGuardians.map((parent) => `<tr><td>${parent.name}</td><td>${parent.relationship}</td><td>${parent.email}</td></tr>`).join("")}</tbody></table></div></article></section><section class="section"><div class="panel"><div class="panel-heading"><h3>Current scout assignments</h3><p>Select any scout to edit patrol, patrol badge association, and leadership role.</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Scout</th><th>Parents</th><th>Patrol</th><th>Current role</th><th>Badge</th></tr></thead><tbody>${roster.map((scout) => `<tr><td><a class="text-link" href="#/scouts/${scout.id}" target="_blank" rel="noreferrer">${scout.name}</a></td><td>${scout.parents.length ? scout.parents.map((parent) => `${parent.relationship}: ${parent.name}`).join("<br />") : "No linked adults"}</td><td>${getPatrolDisplayName(scout.patrol)}</td><td>${scout.leadershipRole || "Not assigned"}</td><td><span class="leader-identity"><img class="leader-emblem" src="${getPatrolBadgeImage(scout.patrol)}" alt="${getPatrolDisplayName(scout.patrol)} badge" /><span>${scout.patrol ? scout.patrolBadge : unassignedPatrolLabel}</span></span></td></tr>`).join("")}</tbody></table></div></div></section>`; }
-function renderScoutRecordEditor(scoutId) { const scout = roster.find((entry) => entry.id === scoutId); if (!scout) { renderNotFound(); return; } if (!canEditScoutRecord(scoutId)) { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Restricted route</p><h2>Scout access required</h2><p class="intro compact">This scout record can be edited by the matching logged-in scout, an adult leader, or an administrator. Switch to Scout mode and select ${scout.name}, or use an adult-leader view.</p></div><div class="status-chip"><span>Route</span><strong>/scouts/${scout.id}</strong></div></section>`; return; } const editorLabel = canSeeOrgChart() ? "Adult leaders and administrators can edit this scout record." : "The logged-in scout can edit their own record."; app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scout record</p><h2>${scout.name}</h2><p class="intro compact">${editorLabel} Text fields and selections save on blur.</p></div><div class="status-chip"><span>Route</span><strong>/scouts/${scout.id}</strong></div></section><section class="section"><div class="panel"><div class="panel-heading"><h3>Scout details</h3><p>Parents and guardians shown here are sourced from the separate adult-scout relationship file.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Name</td><td><input type="text" data-scout-edit-name value="${scout.name}" aria-label="Scout name" /></td></tr><tr><td>Gender</td><td><select data-scout-edit-gender aria-label="Scout gender"><option value="male"${scout.gender === "male" ? " selected" : ""}>male</option><option value="female"${scout.gender === "female" ? " selected" : ""}>female</option><option value="not specified"${scout.gender === "not specified" ? " selected" : ""}>not specified</option></select></td></tr><tr><td>Rank</td><td><input type="text" data-scout-edit-rank value="${scout.rank}" aria-label="Scout rank" /></td></tr><tr><td>Attendance</td><td><select data-scout-edit-attendance aria-label="Scout attendance"><option value="Present"${scout.attendance === "Present" ? " selected" : ""}>Present</option><option value="Absent"${scout.attendance === "Absent" ? " selected" : ""}>Absent</option></select></td></tr><tr><td>Parents / guardians</td><td>${scout.parents.length ? scout.parents.map((parent) => `<a class="text-link" href="#/adults/${parent.adultId}" target="_blank" rel="noreferrer">${parent.relationship}: ${parent.name}</a>`).join("<br />") : "No linked adults"}</td></tr><tr><td>Patrol</td><td><select data-scout-edit-patrol aria-label="Scout patrol">${getPatrolNameList([], { includeUnassigned: true }).map((patrol) => `<option value="${patrol}"${patrol === scout.patrol ? " selected" : ""}>${getPatrolDisplayName(patrol)}</option>`).join("")}</select></td></tr><tr><td>Patrol badge</td><td><span class="leader-identity"><img class="leader-emblem" src="${getPatrolBadgeImage(scout.patrol)}" alt="${getPatrolDisplayName(scout.patrol)} badge" /><span>${getPatrolDisplayName(scout.patrol) === unassignedPatrolLabel ? unassignedPatrolLabel : scout.patrolBadge}</span></span></td></tr><tr><td>Leadership position</td><td><select data-scout-edit-role aria-label="Scout leadership position">${scoutLeadershipOptions.map((role) => `<option value="${role}"${role === scout.leadershipRole ? " selected" : ""}>${role || "Not assigned"}</option>`).join("")}</select></td></tr></tbody></table></div></div></section>`; }
-function renderAccessDenied() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Restricted route</p><h2>Adult leader access required</h2><p class="intro compact">The org chart is now an adult-only route. Switch the view mode to Adult leader or Administrator to access the org chart and its edit pages.</p></div><div class="status-chip"><span>Access</span><strong>Restricted</strong></div></section>`; }
+function renderScoutRecordEditor(scoutId) {
+  const scout = roster.find((entry) => entry.id === scoutId);
+  if (!scout) { renderNotFound(); return; }
+  if (!canEditScoutRecord(scoutId)) {
+    app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Restricted route</p><h2>Scout access required</h2><p class="intro compact">This scout record can be edited by the matching signed-in scout, a linked parent, an adult leader, or an administrator.</p></div><div class="status-chip"><span>Route</span><strong>/scouts/${scout.id}</strong></div></section>`;
+    return;
+  }
+  const editorLabel = canSeeOrgChart()
+    ? "Adult leaders and administrators can edit this scout record."
+    : modeSelect.value === "parent"
+      ? "Linked parents can update this scout record."
+      : "The logged-in scout can edit their own record.";
+  app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scout record</p><h2>${scout.name}</h2><p class="intro compact">${editorLabel} Text fields and selections save on blur.</p></div><div class="status-chip"><span>Route</span><strong>/scouts/${scout.id}</strong></div></section><section class="section"><div class="panel"><div class="panel-heading"><h3>Scout details</h3><p>Parents and guardians shown here are sourced from the separate adult-scout relationship file.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Avatar</td><td><label class="scout-avatar-editor" aria-label="Change avatar for ${scout.name}"><img class="scout-avatar large" data-scout-avatar-preview src="${getScoutAvatar(scout)}" alt="${scout.name} avatar preview" /><span>Change avatar</span><input class="visually-hidden-file-input" type="file" data-scout-avatar-upload accept="image/*" /></label></td></tr><tr><td>Name</td><td><div class="scout-name-editor"><label><span>First name</span><input type="text" data-scout-edit-first-name value="${getScoutFirstName(scout)}" aria-label="Scout first name" /></label><label><span>Last name</span><input type="text" data-scout-edit-last-name value="${getScoutLastName(scout)}" aria-label="Scout last name" /></label></div></td></tr><tr><td>Nickname</td><td><input type="text" data-scout-edit-nickname value="${getScoutNickname(scout)}" aria-label="Scout nickname" /></td></tr><tr><td>Gender</td><td><select data-scout-edit-gender aria-label="Scout gender"><option value="male"${scout.gender === "male" ? " selected" : ""}>male</option><option value="female"${scout.gender === "female" ? " selected" : ""}>female</option><option value="not specified"${scout.gender === "not specified" ? " selected" : ""}>not specified</option></select></td></tr><tr><td>Rank</td><td><select data-scout-edit-rank aria-label="Scout rank">${scoutRankOptions.map((rank) => `<option value="${rank}"${rank === scout.rank ? " selected" : ""}>${rank}</option>`).join("")}</select></td></tr><tr><td>Parents / guardians</td><td>${scout.parents.length ? scout.parents.map((parent) => `<a class="text-link" href="#/adults/${parent.adultId}" target="_blank" rel="noreferrer">${parent.relationship}: ${parent.name}</a>`).join("<br />") : "No linked adults"}</td></tr><tr><td>Patrol</td><td><div class="scout-patrol-editor"><select data-scout-edit-patrol aria-label="Scout patrol">${getPatrolNameList([], { includeUnassigned: true }).map((patrol) => `<option value="${patrol}"${patrol === scout.patrol ? " selected" : ""}>${getPatrolDisplayName(patrol)}</option>`).join("")}</select><img class="leader-emblem scout-patrol-badge-preview" data-scout-patrol-badge-preview src="${getPatrolBadgeImage(scout.patrol)}" alt="${getPatrolDisplayName(scout.patrol)} badge" /></div></td></tr><tr><td>Leadership position</td><td><select data-scout-edit-role aria-label="Scout leadership position">${scoutLeadershipOptions.map((role) => `<option value="${role}"${role === scout.leadershipRole ? " selected" : ""}>${role || "Not assigned"}</option>`).join("")}</select></td></tr></tbody></table></div></div></section>`;
+}
+function renderAccessDenied() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Restricted route</p><h2>Access denied</h2><p class="intro compact">This route requires a signed-in account with the right troop role or linked-scout relationship.</p></div><div class="status-chip"><span>Access</span><strong>Restricted</strong></div></section>`; }
 function renderNotFound() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Prototype route</p><h2>Page not found</h2><p class="intro compact">Try the Home, Scribe Attendance, or Org Chart routes from the navigation above.</p></div></section>`; }
-function renderRoute() { renderIdentityControls(); const hash = window.location.hash || "#/"; if (hash === "#/" || hash === "") { if (modeSelect.value === "public") { renderPublic(); applyTitleAttributes(); return; } renderDashboard(modeSelect.value); applyTitleAttributes(); return; } if (hash === "#/events") { if (canSeeOrgChart()) { renderEventsList(); applyTitleAttributes(); return; } renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/calendar") { renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/list") { renderEventsList(); applyTitleAttributes(); return; } if (hash.startsWith("#/events/")) { renderEventRoute(hash.replace("#/events/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance") { renderScribeIndex(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/event/troop-meeting-stem") { renderScribeEvent(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/print") { renderScribePrint(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/upload") { renderScribeUpload(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/history") { renderScribeHistory(); applyTitleAttributes(); return; } if (hash.startsWith("#/scribe/attendance/history/item/")) { renderScribeHistoryItem(hash.replace("#/scribe/attendance/history/item/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/reports/monthly") { renderScribeMonthly(); applyTitleAttributes(); return; } if (hash === "#/scouts") { renderScoutsRoute(); applyTitleAttributes(); return; } if (hash === "#/patrols") { renderPatrolsRoute(); applyTitleAttributes(); return; } if (hash === "#/adult") { window.location.hash = "#/adults"; return; } if (hash === "#/adults") { renderAdultsRoute(); applyTitleAttributes(); return; } if (hash === "#/org-chart") { renderOrgChart(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-scouts") { renderScoutOrgChartEditor(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-adults") { renderAdultOrgChartEditor(); applyTitleAttributes(); return; } if (hash.startsWith("#/adults/")) { renderAdultRecordEditor(hash.replace("#/adults/", "")); applyTitleAttributes(); return; } if (hash.startsWith("#/scouts/")) { renderScoutRecordEditor(hash.replace("#/scouts/", "")); applyTitleAttributes(); return; } renderNotFound(); applyTitleAttributes(); }
+function renderRoute() { renderIdentityControls(); const hash = window.location.hash || "#/"; if (!currentActor?.authenticated && (hash.startsWith("#/scribe/") || hash.startsWith("#/scouts") || hash.startsWith("#/patrols") || hash.startsWith("#/adults") || hash.startsWith("#/org-chart") || hash.startsWith("#/holidays"))) { renderPublic(); applyTitleAttributes(); return; } if (hash === "#/" || hash === "") { if (modeSelect.value === "public") { renderPublic(); applyTitleAttributes(); return; } renderDashboard(modeSelect.value); applyTitleAttributes(); return; } if (hash === "#/resources") { renderResourcesRoute(); applyTitleAttributes(); return; } if (hash === "#/events") { if (canSeeOrgChart()) { renderEventsList(); applyTitleAttributes(); return; } renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/calendar") { renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/list") { renderEventsList(); applyTitleAttributes(); return; } if (hash.startsWith("#/events/")) { renderEventRoute(hash.replace("#/events/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance") { renderScribeIndex(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/event/troop-meeting-stem") { renderScribeEvent(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/print") { renderScribePrint(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/upload") { renderScribeUpload(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/history") { renderScribeHistory(); applyTitleAttributes(); return; } if (hash.startsWith("#/scribe/attendance/history/item/")) { renderScribeHistoryItem(hash.replace("#/scribe/attendance/history/item/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/reports/monthly") { renderScribeMonthly(); applyTitleAttributes(); return; } if (hash === "#/scouts") { renderScoutsRoute(); applyTitleAttributes(); return; } if (hash === "#/patrols") { renderPatrolsRoute(); applyTitleAttributes(); return; } if (hash === "#/holdays") { window.location.hash = "#/holidays"; return; } if (hash === "#/holidays") { renderHolidaysRoute(); applyTitleAttributes(); return; } if (hash.startsWith("#/holidays/")) { renderHolidayEditor(hash.replace("#/holidays/", "")); applyTitleAttributes(); return; } if (hash === "#/adult") { window.location.hash = "#/adults"; return; } if (hash === "#/adults") { renderAdultsRoute(); applyTitleAttributes(); return; } if (hash === "#/org-chart") { renderOrgChart(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-scouts") { renderScoutOrgChartEditor(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-adults") { renderAdultOrgChartEditor(); applyTitleAttributes(); return; } if (hash.startsWith("#/adults/")) { renderAdultRecordEditor(hash.replace("#/adults/", "")); applyTitleAttributes(); return; } if (hash.startsWith("#/scouts/")) { renderScoutRecordEditor(hash.replace("#/scouts/", "")); applyTitleAttributes(); return; } renderNotFound(); applyTitleAttributes(); }
+function applyScoutFilter(input) {
+  const section = input.closest(".section");
+  const scope = section?.querySelector("[data-scout-filter-scope]");
+  if (!scope) return;
+  const query = input.value.trim().toLowerCase();
+  const items = [...scope.querySelectorAll("[data-scout-filter-item]")];
+  let visibleCount = 0;
+
+  items.forEach((item) => {
+    const haystack = `${item.dataset.scoutName || ""} ${item.dataset.scoutPatrol || ""} ${item.dataset.scoutRank || ""}`;
+    const isVisible = !query || haystack.includes(query);
+    item.hidden = !isVisible;
+    if (isVisible) visibleCount += 1;
+  });
+
+  scope.querySelectorAll("[data-scout-patrol-card]").forEach((card) => {
+    const cardPatrolMatches = !query || String(card.dataset.scoutPatrol || "").includes(query);
+    const visibleScouts = [...card.querySelectorAll("[data-scout-filter-item]")].filter((item) => !item.hidden);
+    card.hidden = !cardPatrolMatches && !visibleScouts.length;
+  });
+
+  const count = section.querySelector("[data-scout-filter-count]");
+  if (count) {
+    count.textContent = query ? `${visibleCount} matching scout${visibleCount === 1 ? "" : "s"}` : `${items.length} scout${items.length === 1 ? "" : "s"}`;
+  }
+}
 function updateCarousel(carousel, index) { const slides = [...carousel.querySelectorAll(".carousel-slide")]; const dots = [...carousel.querySelectorAll(".carousel-dot")]; const nextIndex = (index + slides.length) % slides.length; carousel.dataset.index = String(nextIndex); slides.forEach((slide, slideIndex) => slide.classList.toggle("is-active", slideIndex === nextIndex)); dots.forEach((dot, dotIndex) => dot.classList.toggle("is-active", dotIndex === nextIndex)); }
 modeSelect.addEventListener("change", () => { window.localStorage.setItem("troop883-view-mode", modeSelect.value); renderRoute(); });
+document.addEventListener("submit", async (event) => {
+  const form = event.target.closest("[data-login-form]");
+  if (!form) return;
+  event.preventDefault();
+  const email = form.querySelector("[data-login-email]")?.value.trim();
+  const password = form.querySelector("[data-login-password]")?.value || "";
+  const otp = form.querySelector("[data-login-otp]")?.value.trim();
+  form.querySelector("[data-login-error]")?.remove();
+  const response = await fetch("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credentials: { email }, password, otp }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    form.insertAdjacentHTML("beforeend", `<span class="nav-note" data-login-error>${payload.error || "Login failed"}</span>`);
+    return;
+  }
+  sessionToken = payload.session?.token || "";
+  window.localStorage.setItem("troop883-auth-token", sessionToken);
+  currentActor = { authenticated: true, account: payload.account, ...payload.access };
+  await loadData();
+  renderRoute();
+});
+document.addEventListener("click", async (event) => {
+  const passwordToggle = event.target.closest("[data-toggle-password]");
+  if (passwordToggle) {
+    const passwordInput = passwordToggle.closest(".password-field")?.querySelector("[data-login-password]");
+    const showing = passwordInput?.type === "text";
+    if (passwordInput) {
+      passwordInput.type = showing ? "password" : "text";
+      passwordToggle.textContent = showing ? "Show" : "Hide";
+      passwordToggle.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+    }
+    return;
+  }
+  if (!event.target.closest("[data-logout]")) return;
+  sessionToken = "";
+  currentActor = null;
+  window.localStorage.removeItem("troop883-auth-token");
+  await loadData();
+  window.location.hash = "#/";
+  renderRoute();
+});
 document.addEventListener("change", (event) => {
   const scoutSessionSelect = event.target.closest("#activeScoutSelect");
   if (!scoutSessionSelect) return;
@@ -1136,7 +1421,7 @@ document.addEventListener("change", (event) => {
   }
   renderRoute();
 });
-document.addEventListener("click", (event) => {
+document.addEventListener("click", async (event) => {
   const attendanceWindowButton = event.target.closest("[data-attendance-window]");
   if (attendanceWindowButton) {
     const attendanceItems = getAttendanceHistoryItemsSorted();
@@ -1157,6 +1442,19 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const calendarEventButton = event.target.closest("[data-calendar-event]");
+  if (calendarEventButton) {
+    setSelectedCalendarEventId(calendarEventButton.dataset.calendarEvent);
+    if (calendarEventButton.dataset.calendarDate) {
+      setSelectedCalendarDate(calendarEventButton.dataset.calendarDate);
+      setSelectedEventMonth(calendarEventButton.dataset.calendarDate.slice(0, 7));
+    }
+    await hydratePublicCalendarEventMedia(calendarEventButton.dataset.calendarEvent);
+    requestSelectedCalendarEventScroll();
+    renderRoute();
+    return;
+  }
+
   const calendarDateButton = event.target.closest("[data-calendar-date]");
   if (calendarDateButton) {
     const dateKey = calendarDateButton.dataset.calendarDate;
@@ -1165,17 +1463,6 @@ document.addEventListener("click", (event) => {
     const date = parseDateKey(dateKey);
     const firstEventForDate = date ? events.filter((item) => eventOccursOnDate(item, date)).sort((a, b) => (parseEventStartDate(a)?.getTime() || 0) - (parseEventStartDate(b)?.getTime() || 0))[0] : null;
     setSelectedCalendarEventId(firstEventForDate?.id || "");
-    renderRoute();
-    return;
-  }
-
-  const calendarEventButton = event.target.closest("[data-calendar-event]");
-  if (calendarEventButton) {
-    setSelectedCalendarEventId(calendarEventButton.dataset.calendarEvent);
-    if (calendarEventButton.dataset.calendarDate) {
-      setSelectedCalendarDate(calendarEventButton.dataset.calendarDate);
-      setSelectedEventMonth(calendarEventButton.dataset.calendarDate.slice(0, 7));
-    }
     renderRoute();
     return;
   }
@@ -1291,6 +1578,36 @@ document.addEventListener("click", async (event) => {
     if (!canSeeOrgChart()) return;
     const createdEvent = await createEventForDate(addEventButton.dataset.addEventDate);
     window.location.hash = `#/events/${createdEvent.id}`;
+    return;
+  }
+
+  const saveHolidayButton = event.target.closest("[data-save-holiday]");
+  if (saveHolidayButton) {
+    if (!canSeeOrgChart()) return;
+    const holiday = normalizeHoliday({
+      id: saveHolidayButton.dataset.saveHoliday || nextHolidayId(),
+      name: document.querySelector("[data-holiday-name]")?.value.trim() || "Custom holiday",
+      date: document.querySelector("[data-holiday-date]")?.value || getTodayDateKey(),
+      endDate: document.querySelector("[data-holiday-end-date]")?.value || document.querySelector("[data-holiday-date]")?.value || getTodayDateKey(),
+      placedBy: document.querySelector("[data-holiday-placed-by]")?.value.trim() || "",
+      role: document.querySelector("[data-holiday-role]")?.value || "Adult leader",
+      note: document.querySelector("[data-holiday-note]")?.value.trim() || "",
+    });
+    holidays = holidays.filter((item) => item.id !== holiday.id);
+    holidays.push(holiday);
+    await saveHolidays();
+    window.location.hash = `#/holidays/${holiday.id}`;
+    renderRoute();
+    return;
+  }
+
+  const deleteHolidayButton = event.target.closest("[data-delete-holiday]");
+  if (deleteHolidayButton) {
+    if (!canSeeOrgChart()) return;
+    holidays = holidays.filter((item) => item.id !== deleteHolidayButton.dataset.deleteHoliday);
+    await saveHolidays();
+    window.location.hash = "#/holidays";
+    renderRoute();
     return;
   }
 
@@ -1471,6 +1788,8 @@ document.addEventListener("click", async (event) => {
     const nameInput = document.querySelector("[data-new-adult-name]");
     const relationshipInput = document.querySelector("[data-new-adult-relationship]");
     const emailInput = document.querySelector("[data-new-adult-email]");
+    const homePhoneInput = document.querySelector("[data-new-adult-home-phone]");
+    const cellPhoneInput = document.querySelector("[data-new-adult-cell-phone]");
     const name = nameInput?.value.trim();
 
     if (!name) return;
@@ -1481,6 +1800,8 @@ document.addEventListener("click", async (event) => {
       name,
       relationship: relationshipInput?.value || "Adult leader",
       email: emailInput?.value.trim() || `${slugifyName(name)}@example.com`,
+      homePhone: homePhoneInput?.value.trim() || "",
+      cellPhone: cellPhoneInput?.value.trim() || "",
     });
     await saveAdults();
     rebuildDerivedData();
@@ -1555,6 +1876,8 @@ document.addEventListener("focusout", async (event) => {
         name: typedName,
         relationship: "Adult leader",
         email: `${slugifyName(typedName)}@example.com`,
+        homePhone: "",
+        cellPhone: "",
       };
       adults.push(adult);
       await saveAdults();
@@ -1579,17 +1902,23 @@ document.addEventListener("focusout", async (event) => {
 
   const adultNameInput = event.target.closest("[data-adult-edit-name]");
   const adultEmailInput = event.target.closest("[data-adult-edit-email]");
-  if (adultNameInput || adultEmailInput) {
+  const adultHomePhoneInput = event.target.closest("[data-adult-edit-home-phone]");
+  const adultCellPhoneInput = event.target.closest("[data-adult-edit-cell-phone]");
+  if (adultNameInput || adultEmailInput || adultHomePhoneInput || adultCellPhoneInput) {
     const adultId = (window.location.hash || "").replace("#/adults/", "");
     const adult = adults.find((entry) => entry.id === adultId);
     if (!adult) return;
     const nextName = document.querySelector("[data-adult-edit-name]")?.value.trim();
     const nextEmail = document.querySelector("[data-adult-edit-email]")?.value.trim() || `${slugifyName(nextName || adult.name)}@example.com`;
+    const nextHomePhone = document.querySelector("[data-adult-edit-home-phone]")?.value.trim() || "";
+    const nextCellPhone = document.querySelector("[data-adult-edit-cell-phone]")?.value.trim() || "";
     const previousName = adult.name;
     if (nextName) {
       adult.name = nextName;
     }
     adult.email = nextEmail;
+    adult.homePhone = nextHomePhone;
+    adult.cellPhone = nextCellPhone;
     await saveAdults();
     rebuildDerivedData();
     renderRoute();
@@ -1612,28 +1941,32 @@ document.addEventListener("focusout", async (event) => {
     return;
   }
 
-  const scoutNameInput = event.target.closest("[data-scout-edit-name]");
+  const scoutFirstNameInput = event.target.closest("[data-scout-edit-first-name]");
+  const scoutLastNameInput = event.target.closest("[data-scout-edit-last-name]");
+  const scoutNicknameInput = event.target.closest("[data-scout-edit-nickname]");
   const scoutGenderInput = event.target.closest("[data-scout-edit-gender]");
   const scoutRankInput = event.target.closest("[data-scout-edit-rank]");
-  const scoutAttendanceInput = event.target.closest("[data-scout-edit-attendance]");
   const scoutPatrolInput = event.target.closest("[data-scout-edit-patrol]");
   const scoutRoleInput = event.target.closest("[data-scout-edit-role]");
-  if (scoutNameInput || scoutGenderInput || scoutRankInput || scoutAttendanceInput || scoutPatrolInput || scoutRoleInput) {
+  if (scoutFirstNameInput || scoutLastNameInput || scoutNicknameInput || scoutGenderInput || scoutRankInput || scoutPatrolInput || scoutRoleInput) {
     const scoutId = (window.location.hash || "").replace("#/scouts/", "");
     if (!scoutId || !canEditScoutRecord(scoutId)) return;
     const scout = scouts.find((entry) => entry.id === scoutId);
     if (!scout) return;
-    const nextName = document.querySelector("[data-scout-edit-name]")?.value.trim();
+    const nextFirstName = document.querySelector("[data-scout-edit-first-name]")?.value.trim();
+    const nextLastName = document.querySelector("[data-scout-edit-last-name]")?.value.trim();
+    const nextNickname = document.querySelector("[data-scout-edit-nickname]")?.value.trim();
     const nextGender = document.querySelector("[data-scout-edit-gender]")?.value.trim();
     const nextRank = document.querySelector("[data-scout-edit-rank]")?.value.trim();
-    const nextAttendance = document.querySelector("[data-scout-edit-attendance]")?.value || scout.attendance;
     const nextPatrol = document.querySelector("[data-scout-edit-patrol]")?.value ?? scout.patrol;
     const requestedRole = document.querySelector("[data-scout-edit-role]")?.value || "";
     const nextRole = !String(nextPatrol || "").trim() && isPatrolSpecificRole(requestedRole) ? "" : requestedRole;
-    scout.name = nextName || scout.name;
+    scout.firstName = nextFirstName || getScoutFirstName(scout);
+    scout.lastName = nextLastName || "";
+    scout.name = [scout.firstName, scout.lastName].filter(Boolean).join(" ");
+    scout.nickname = nextNickname || getDefaultScoutNickname(scout);
     scout.gender = nextGender || "not specified";
     scout.rank = nextRank || "Scout";
-    scout.attendance = nextAttendance;
     scout.patrol = nextPatrol;
     scout.patrolBadge = getPatrolBadgeValue(nextPatrol, scout.patrolBadge);
     scout.leadershipRole = nextRole;
@@ -1645,17 +1978,30 @@ document.addEventListener("focusout", async (event) => {
 
 });
 document.addEventListener("input", (event) => {
+  const scoutFilterInput = event.target.closest("[data-scout-filter]");
+  if (scoutFilterInput) {
+    applyScoutFilter(scoutFilterInput);
+    return;
+  }
+
   const patrolBadgeInput = event.target.closest("[data-patrol-badge]");
   if (patrolBadgeInput) {
     setPatrolBadgePreview(patrolBadgeInput);
     return;
   }
+
   const eventEditorField = event.target.closest(eventEditorFieldSelector);
   if (!eventEditorField) return;
   const eventId = (window.location.hash || "").replace("#/events/", "");
   queueEventAutosave(eventId, 500);
 });
 document.addEventListener("change", (event) => {
+  const scoutPatrolSelect = event.target.closest("[data-scout-edit-patrol]");
+  if (scoutPatrolSelect) {
+    setScoutPatrolBadgePreview(scoutPatrolSelect);
+    return;
+  }
+
   const patrolInsertScoutSelect = event.target.closest("[data-patrol-insert-scout]");
   if (patrolInsertScoutSelect) {
     if (!canEditScouts()) return;
@@ -1678,6 +2024,27 @@ document.addEventListener("change", (event) => {
   queueEventAutosave(eventId, 500);
 });
 document.addEventListener("change", (event) => {
+  const scoutAvatarUploadInput = event.target.closest("[data-scout-avatar-upload]");
+  if (scoutAvatarUploadInput) {
+    const file = [...(scoutAvatarUploadInput.files || [])].find((entry) => /^image\//.test(String(entry.type || "")));
+    const scoutId = (window.location.hash || "").replace("#/scouts/", "");
+    const avatarPreview = document.querySelector("[data-scout-avatar-preview]");
+    if (!file || !scoutId || !avatarPreview || !canEditScoutRecord(scoutId)) return;
+    readFileAsDataUrl(file)
+      .then(async (item) => {
+        const scout = scouts.find((entry) => entry.id === scoutId);
+        if (!scout) return;
+        scout.avatar = item.src;
+        avatarPreview.src = item.src;
+        scoutAvatarUploadInput.value = "";
+        await saveScouts();
+        rebuildDerivedData();
+        renderRoute();
+      })
+      .catch(() => {});
+    return;
+  }
+
   const patrolBadgeUploadInput = event.target.closest("[data-patrol-badge-upload]");
   if (patrolBadgeUploadInput) {
     const file = [...(patrolBadgeUploadInput.files || [])].find((entry) => /^image\//.test(String(entry.type || "")));
