@@ -1,0 +1,18 @@
+services:
+  scouts-landing:
+    build:
+      context: ..
+      dockerfile: ./scouts-landing/Dockerfile
+    image: scouts-landing:latest
+    ports:
+      - "${PORT:-4177}:4173"
+    environment:
+      PORT: 4173
+      ORM_BASE_URL: "${ORM_BASE_URL:-http://host.docker.internal:4176}"
+      AUTH_BASE_URL: "${AUTH_BASE_URL:-http://host.docker.internal:3001}"
+    volumes:
+      - scouts-landing-resources:/app/resources
+    restart: unless-stopped
+
+volumes:
+  scouts-landing-resources:
