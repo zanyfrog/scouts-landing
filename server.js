@@ -8,6 +8,8 @@ const port = Number(process.env.PORT || 4173);
 const ormBaseUrl = String(process.env.ORM_BASE_URL || "http://127.0.0.1:4174").replace(/\/+$/, "");
 const authBaseUrl = String(process.env.AUTH_BASE_URL || "http://127.0.0.1:3000").replace(/\/+$/, "");
 const holidaysFile = path.join(root, "resources", "holidays.json");
+const ormRoot = path.dirname(require.resolve("../scouts.orm"));
+const eventImageReferencesFile = path.join(ormRoot, "data", "event-image-references.json");
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -64,6 +66,27 @@ function writeJsonFile(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function isGitLfsPointerFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+
+  try {
+    return fs.readFileSync(filePath, "utf8").startsWith("version https://git-lfs.github.com/spec/v1");
+  } catch (error) {
+    return false;
+  }
+}
+
+function repairOrmEventsJson() {
+  const ormRoot = path.dirname(require.resolve("../scouts.orm"));
+  const eventsJsonFile = path.join(ormRoot, "data", "events.json");
+
+  if (isGitLfsPointerFile(eventsJsonFile)) {
+    fs.unlinkSync(eventsJsonFile);
+  }
+}
+
 function normalizeHoliday(record) {
   const date = String(record?.date || "").trim();
   const rawEndDate = String(record?.endDate || record?.date || "").trim();
@@ -85,6 +108,14 @@ function readHolidays() {
 
 function saveHolidays(holidays) {
   writeJsonFile(holidaysFile, (Array.isArray(holidays) ? holidays : []).map(normalizeHoliday).filter((holiday) => holiday.id && holiday.date));
+}
+
+function readEventImageSources() {
+  const references = readJsonFile(eventImageReferencesFile, {});
+  const values = Object.values(references).filter((value) => typeof value === "string" && value.trim());
+  const publicImage = values.find((value) => /^https?:\/\//i.test(value)) || "";
+  const inlineImages = values.filter((value) => /^data:image\//i.test(value));
+  return { publicImage, inlineImages };
 }
 
 function isPublicImageReference(value) {
@@ -132,6 +163,46 @@ function publicFeaturedImageEventIds(events) {
   return ids;
 }
 
+function publicFallbackImageForEvent(event, index, sources) {
+  const text = `${event?.title || ""} ${event?.homeBase || ""} ${event?.location || ""}`.toLowerCase();
+
+  if (text.includes("sandy point")) {
+    return sources.publicImage || sources.inlineImages[0] || "";
+  }
+
+  if (text.includes("walkersville")) {
+    return sources.inlineImages[0] || sources.publicImage || "";
+  }
+
+  if (text.includes("adventure")) {
+    return sources.inlineImages[1] || sources.inlineImages[0] || sources.publicImage || "";
+  }
+
+  if (text.includes("camp")) {
+    return sources.inlineImages[index % Math.max(1, sources.inlineImages.length)] || sources.publicImage || "";
+  }
+
+  return sources.inlineImages[index % Math.max(1, sources.inlineImages.length)] || sources.publicImage || "";
+}
+
+function enrichPublicFeaturedEventMedia(events) {
+  const sources = readEventImageSources();
+  const featuredIds = publicFeaturedImageEventIds(events);
+  return (Array.isArray(events) ? events : []).map((event, index) => {
+    if (!featuredIds.has(event?.id)) {
+      return event;
+    }
+
+    const gallery = Array.isArray(event?.gallery) ? event.gallery : [];
+    const image = String(event?.image || "").trim() || publicFallbackImageForEvent(event, index, sources);
+    return {
+      ...event,
+      image,
+      gallery: gallery.length ? gallery : (image ? [{ src: image }] : []),
+    };
+  });
+}
+
 function publicEventSummary(event, includeInlineImages = false) {
   let gallery = Array.isArray(event.gallery)
     ? event.gallery
@@ -173,10 +244,10 @@ function publicEventSummary(event, includeInlineImages = false) {
 function publicPayload() {
   const data = orm.getDataPayload();
   const sourceEvents = Array.isArray(data.events) ? data.events : [];
-  const imageEventIds = publicFeaturedImageEventIds(sourceEvents);
+  const enrichedEvents = enrichPublicFeaturedEventMedia(sourceEvents);
   return {
     data: {
-      events: sourceEvents.map((event) => publicEventSummary(event, imageEventIds.has(event.id))),
+      events: enrichedEvents.map((event) => publicEventSummary(event, true)),
       patrols: Array.isArray(data.patrols) ? data.patrols : [],
       holidays: readHolidays(),
     },
@@ -185,8 +256,8 @@ function publicPayload() {
 function publicEventDetailPayload(eventId) {
   const data = orm.getDataPayload();
   const sourceEvents = Array.isArray(data.events) ? data.events : [];
-  const event = sourceEvents.find((item) => String(item.id) === String(eventId));
-  return event ? { data: publicEventSummary(event, true) } : null;
+  const enrichedEvent = enrichPublicFeaturedEventMedia(sourceEvents).find((item) => String(item.id) === String(eventId));
+  return enrichedEvent ? { data: publicEventSummary(enrichedEvent, true) } : null;
 }
 
 function forwardApiRequest(req, res, baseUrl = ormBaseUrl) {
@@ -314,6 +385,7 @@ function resolveStaticFilePath(requestedPath) {
   return path.join(root, safePath);
 }
 
+repairOrmEventsJson();
 orm.ensureDataFiles();
 if (!fs.existsSync(holidaysFile)) {
   saveHolidays([]);
