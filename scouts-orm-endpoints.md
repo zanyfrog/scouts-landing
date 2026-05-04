@@ -11,6 +11,8 @@ Source: `F:\Projects\Codex\Scouts\scouts.orm\server.js`
 | `GET` | `/health` | Public | Returns `{ "ok": true }` when the ORM service is running. |
 | `GET` | `/openapi.json` | Public | Returns the OpenAPI document defined by the service. |
 | `GET` | `/api/public` | Public | Returns public-facing data: `events` and `patrols`. Does not include scouts, adults, or relationships. |
+| `GET` | `/api/events?startDate=<yyyy-mm-dd>&endDate=<yyyy-mm-dd>&page=<n>&pageSize=<n>` | Public | Returns lightweight, paginated event rows matching the date range. Defaults to `page=1` and `pageSize=50`; `pageSize` is capped at `100`. |
+| `GET` | `/api/events/:eventId?includeMedia=true` | Public | Returns one event by id. Used for targeted event media/detail hydration without loading media for every event in a list. |
 
 ## Authenticated Read Endpoints
 
@@ -33,6 +35,34 @@ All write endpoints replace the full collection named in the request body.
 | `POST` | `/api/adult-scout-relationships` | Administrator only | `{ "adultScoutRelationships": [...] }` | Replaces all adult/scout relationships. |
 | `POST` | `/api/patrols` | Operational write access | `{ "patrols": [...] }` | Replaces all patrols. Allowed for administrators and adult leaders. |
 | `POST` | `/api/events` | Administrator or adult leader | `{ "events": [...] }` | Replaces all events. |
+
+## Event Retrieval
+
+Use this endpoint when a client needs events for a bounded time window:
+
+```http
+GET /api/events?startDate=2026-04-01&endDate=2026-04-30&page=1&pageSize=25
+```
+
+Response shape:
+
+```json
+{
+  "events": [],
+  "pagination": {
+    "page": 1,
+    "pageSize": 25,
+    "total": 0,
+    "totalPages": 0
+  },
+  "range": {
+    "startDate": "2026-04-01",
+    "endDate": "2026-04-30"
+  }
+}
+```
+
+The event list response intentionally omits heavy inline media fields. Event detail/media hydration should use a detail endpoint or another targeted lookup rather than loading all event media with the list.
 
 ## Role Notes
 

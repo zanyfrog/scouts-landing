@@ -9,6 +9,7 @@ const ormBaseUrl = String(process.env.ORM_BASE_URL || "http://127.0.0.1:4174").r
 const authBaseUrl = String(process.env.AUTH_BASE_URL || "http://127.0.0.1:3000").replace(/\/+$/, "");
 const holidaysFile = path.join(root, "resources", "holidays.json");
 const ormRoot = path.dirname(require.resolve("../scouts.orm"));
+const patrolsFile = path.join(ormRoot, "data", "patrols.json");
 const eventImageReferencesFile = path.join(ormRoot, "data", "event-image-references.json");
 
 const contentTypes = {
@@ -46,7 +47,15 @@ function json(res, statusCode, payload) {
 
 function isLocalRequest(req) {
   const address = req.socket.remoteAddress || "";
-  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+  const host = String(req.headers.host || "").split(":")[0].toLowerCase();
+  return (
+    address === "127.0.0.1" ||
+    address === "::1" ||
+    address === "::ffff:127.0.0.1" ||
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1"
+  );
 }
 
 function readJsonFile(filePath, fallback = []) {
@@ -115,20 +124,52 @@ function readEventImageSources() {
   const values = Object.values(references).filter((value) => typeof value === "string" && value.trim());
   const publicImage = values.find((value) => /^https?:\/\//i.test(value)) || "";
   const inlineImages = values.filter((value) => /^data:image\//i.test(value));
-  return { publicImage, inlineImages };
+  const photoImages = inlineImages.filter((value) => !/^data:image\/svg/i.test(value));
+  const smallPhotoImages = photoImages.filter((value) => value.length < 50000);
+  return { publicImage, inlineImages, photoImages, smallPhotoImages };
 }
 
 function isPublicImageReference(value) {
   const source = String(value || "").trim();
-  return /^https?:\/\//i.test(source) || /^assets\//i.test(source);
+  return /^https?:\/\//i.test(source) || /^assets\//i.test(source) || /^\/api\/public\/events\//i.test(source);
 }
 
 function isInlineImageReference(value) {
-  return /^data:image\//i.test(String(value || "").trim());
+  return /^data:(image|video)\//i.test(String(value || "").trim());
 }
 
 function publicImageAllowed(value, includeInlineImages = false) {
   return isPublicImageReference(value) || (includeInlineImages && isInlineImageReference(value));
+}
+
+function publicMediaReference(eventId, kind, index = 0) {
+  const path = kind === "primary"
+    ? `/api/public/events/${encodeURIComponent(eventId)}/media/primary`
+    : `/api/public/events/${encodeURIComponent(eventId)}/media/gallery/${index}`;
+  return path;
+}
+
+function toPublicMediaReference(eventId, value, kind, index = 0) {
+  const source = String(value || "").trim();
+  if (!source) return "";
+  return isInlineImageReference(source) ? publicMediaReference(eventId, kind, index) : source;
+}
+
+function sendDataUrlMedia(res, dataUrl) {
+  const source = String(dataUrl || "").trim();
+  const match = source.match(/^data:([^;,]+)(;base64)?,(.*)$/s);
+  if (!match) {
+    json(res, 404, { error: "Media not found" });
+    return;
+  }
+
+  const [, mimeType, base64Flag, payload] = match;
+  const body = base64Flag ? Buffer.from(payload, "base64") : Buffer.from(decodeURIComponent(payload), "utf8");
+  res.writeHead(200, {
+    "Content-Type": mimeType || "application/octet-stream",
+    "Cache-Control": "no-store",
+  });
+  res.end(body);
 }
 
 function eventStartTime(event) {
@@ -156,7 +197,7 @@ function publicFeaturedImageEventIds(events) {
 
   const walkersvilleSource = sortedEvents.find((event) => {
     const location = String(event.homeBase || event.location || "").toLowerCase();
-    return location.includes("walkersville") && /^2026-04-(09|10)/.test(String(event.startDate || ""));
+    return location.includes("walkersville");
   });
   if (walkersvilleSource?.id) ids.add(walkersvilleSource.id);
 
@@ -171,7 +212,11 @@ function publicFallbackImageForEvent(event, index, sources) {
   }
 
   if (text.includes("walkersville")) {
-    return sources.inlineImages[0] || sources.publicImage || "";
+    return sources.photoImages[0] || sources.inlineImages[0] || sources.publicImage || "";
+  }
+
+  if (text.includes("board of review") || text.includes("review")) {
+    return sources.smallPhotoImages[0] || sources.photoImages[0] || sources.inlineImages[0] || sources.publicImage || "";
   }
 
   if (text.includes("adventure")) {
@@ -179,10 +224,43 @@ function publicFallbackImageForEvent(event, index, sources) {
   }
 
   if (text.includes("camp")) {
-    return sources.inlineImages[index % Math.max(1, sources.inlineImages.length)] || sources.publicImage || "";
+    const campImages = sources.photoImages.length ? sources.photoImages : sources.inlineImages;
+    return campImages[index % Math.max(1, campImages.length)] || sources.publicImage || "";
   }
 
-  return sources.inlineImages[index % Math.max(1, sources.inlineImages.length)] || sources.publicImage || "";
+  const fallbackImages = sources.photoImages.length ? sources.photoImages : sources.inlineImages;
+  return fallbackImages[index % Math.max(1, fallbackImages.length)] || sources.publicImage || "";
+}
+
+function shouldAvoidFullPublicMediaFetch(event) {
+  const text = `${event?.title || ""} ${event?.category || ""} ${event?.homeBase || ""} ${event?.location || ""}`.toLowerCase();
+  return text.includes("walkersville") || text.includes("camp") || text.includes("board of review") || text.includes("review");
+}
+
+function hasPublicEventMedia(event) {
+  const image = String(event?.image || "").trim();
+  const gallery = Array.isArray(event?.gallery) ? event.gallery : [];
+  return Boolean(image) || gallery.some((item) => String(item?.src || item?.image || item || "").trim());
+}
+
+function shouldIncludeCalendarFallbackImage(event) {
+  const text = `${event?.title || ""} ${event?.category || ""} ${event?.homeBase || ""} ${event?.location || ""}`.toLowerCase();
+  return text.includes("board of review") || text.includes("review");
+}
+
+function enrichCalendarEventMedia(events) {
+  const sources = readEventImageSources();
+  return (Array.isArray(events) ? events : []).map((event, index) => {
+    if (!shouldIncludeCalendarFallbackImage(event) || String(event?.image || "").trim()) {
+      return event;
+    }
+    const image = publicFallbackImageForEvent(event, index, sources);
+    return {
+      ...event,
+      image,
+      gallery: image ? [{ src: image }] : [],
+    };
+  });
 }
 
 function enrichPublicFeaturedEventMedia(events) {
@@ -203,14 +281,62 @@ function enrichPublicFeaturedEventMedia(events) {
   });
 }
 
+async function fetchFullOrmEvent(eventId) {
+  if (!eventId) return null;
+  if (ormBaseUrl) {
+    try {
+      const response = await fetch(`${ormBaseUrl}/api/events/${encodeURIComponent(eventId)}?includeMedia=true`, { cache: "no-store" });
+      if (response.ok) {
+        const payload = await response.json();
+        return payload.event || payload.data || payload;
+      }
+    } catch (error) {}
+  }
+  return orm.getEventById(eventId, { includeMedia: true });
+}
+
+async function fetchPublicOrmEventSummary(eventId) {
+  if (!eventId) return null;
+  if (ormBaseUrl) {
+    try {
+      const response = await fetch(`${ormBaseUrl}/api/events/${encodeURIComponent(eventId)}?includeMedia=false`, { cache: "no-store" });
+      if (response.ok) {
+        const payload = await response.json();
+        return payload.event || payload.data || payload;
+      }
+    } catch (error) {}
+  }
+  return orm.getEventById(eventId, { includeMedia: false });
+}
+
+async function hydrateFeaturedEventMedia(events) {
+  const featuredIds = publicFeaturedImageEventIds(events);
+  const fullEvents = await Promise.all([...featuredIds].map(fetchFullOrmEvent));
+  const fullById = new Map(fullEvents.filter(Boolean).map((event) => [String(event.id), event]));
+  return events.map((event) => {
+    const fullEvent = fullById.get(String(event.id));
+    if (!fullEvent) return event;
+    return {
+      ...event,
+      image: fullEvent.image || event.image,
+      gallery: Array.isArray(fullEvent.gallery) ? fullEvent.gallery : event.gallery,
+    };
+  });
+}
+
 function publicEventSummary(event, includeInlineImages = false) {
   let gallery = Array.isArray(event.gallery)
     ? event.gallery
         .map((item) => (typeof item === "string" ? { src: item } : item))
         .filter((item) => publicImageAllowed(item?.src || item?.image, includeInlineImages))
         .slice(0, includeInlineImages ? 1 : 3)
+        .map((item, index) => ({
+          ...item,
+          src: toPublicMediaReference(event.id, item?.src || item?.image, "gallery", index),
+          image: undefined,
+        }))
     : [];
-  const image = publicImageAllowed(event.image, includeInlineImages) ? event.image : gallery[0]?.src || "";
+  const image = publicImageAllowed(event.image, includeInlineImages) ? toPublicMediaReference(event.id, event.image, "primary") : gallery[0]?.src || "";
   if (includeInlineImages && image && gallery.length && (gallery[0].src || gallery[0].image) === image) {
     gallery = [];
   }
@@ -241,23 +367,95 @@ function publicEventSummary(event, includeInlineImages = false) {
   };
 }
 
-function publicPayload() {
-  const data = orm.getDataPayload();
-  const sourceEvents = Array.isArray(data.events) ? data.events : [];
-  const enrichedEvents = enrichPublicFeaturedEventMedia(sourceEvents);
+function dedupePublicEventMedia(events) {
+  const seenMedia = new Set();
+  return (Array.isArray(events) ? events : []).map((event) => {
+    const image = String(event?.image || "");
+    const gallery = Array.isArray(event?.gallery) ? event.gallery : [];
+    const mediaKey = image || gallery.map((item) => item?.src || item?.image || "").find(Boolean) || "";
+    if (!mediaKey || !seenMedia.has(mediaKey)) {
+      if (mediaKey) seenMedia.add(mediaKey);
+      return event;
+    }
+    return { ...event, image: "", gallery: [] };
+  });
+}
+
+function buildPublicEventsQuery(reqUrl) {
+  const sourceUrl = new URL(reqUrl, "http://localhost");
+  const query = new URLSearchParams();
+  ["startDate", "endDate", "page", "pageSize"].forEach((key) => {
+    const value = sourceUrl.searchParams.get(key);
+    if (value) query.set(key, value);
+  });
+  return query.toString();
+}
+
+async function loadPublicEventsResult(reqUrl) {
+  const query = buildPublicEventsQuery(reqUrl);
+  if (ormBaseUrl) {
+    try {
+      const response = await fetch(`${ormBaseUrl}/api/events${query ? `?${query}` : ""}`, { cache: "no-store" });
+      if (response.ok) return response.json();
+    } catch (error) {}
+  }
+
+  const url = new URL(reqUrl, "http://localhost");
+  return orm.getEvents({
+    startDate: url.searchParams.get("startDate") || "",
+    endDate: url.searchParams.get("endDate") || "",
+    page: url.searchParams.get("page") || 1,
+    pageSize: url.searchParams.get("pageSize") || 50,
+  });
+}
+
+async function loadPublicEvents(reqUrl) {
+  const payload = await loadPublicEventsResult(reqUrl);
+  return Array.isArray(payload.events) ? payload.events : [];
+}
+
+async function publicPayload(reqUrl) {
+  const sourceEvents = await loadPublicEvents(reqUrl);
+  const hydratedEvents = await hydrateFeaturedEventMedia(sourceEvents);
+  const enrichedEvents = dedupePublicEventMedia(enrichPublicFeaturedEventMedia(hydratedEvents));
   return {
     data: {
       events: enrichedEvents.map((event) => publicEventSummary(event, true)),
-      patrols: Array.isArray(data.patrols) ? data.patrols : [],
+      patrols: readJsonFile(patrolsFile, []),
       holidays: readHolidays(),
     },
   };
 }
-function publicEventDetailPayload(eventId) {
-  const data = orm.getDataPayload();
-  const sourceEvents = Array.isArray(data.events) ? data.events : [];
-  const enrichedEvent = enrichPublicFeaturedEventMedia(sourceEvents).find((item) => String(item.id) === String(eventId));
-  return enrichedEvent ? { data: publicEventSummary(enrichedEvent, true) } : null;
+async function publicEventDetailPayload(eventId) {
+  let sourceEvent = await fetchPublicOrmEventSummary(eventId);
+  if (!sourceEvent) return null;
+
+  if (!hasPublicEventMedia(sourceEvent) && !shouldAvoidFullPublicMediaFetch(sourceEvent)) {
+    const fullEvent = await fetchFullOrmEvent(eventId);
+    if (fullEvent) {
+      sourceEvent = {
+        ...sourceEvent,
+        image: fullEvent.image || sourceEvent.image,
+        gallery: Array.isArray(fullEvent.gallery) ? fullEvent.gallery : sourceEvent.gallery,
+      };
+    }
+  }
+
+  const enrichedEvent = enrichPublicFeaturedEventMedia([sourceEvent])[0];
+  return { data: publicEventSummary(enrichedEvent, true) };
+}
+
+async function publicEventMediaSource(eventId, mediaPath) {
+  const event = await fetchFullOrmEvent(eventId);
+  if (!event) return "";
+  if (mediaPath === "primary") {
+    return String(event.image || "").trim();
+  }
+  const galleryMatch = String(mediaPath || "").match(/^gallery\/(\d+)$/);
+  if (!galleryMatch) return "";
+  const galleryIndex = Number(galleryMatch[1]);
+  const galleryItem = Array.isArray(event.gallery) ? event.gallery[galleryIndex] : null;
+  return String((typeof galleryItem === "string" ? galleryItem : galleryItem?.src || galleryItem?.image) || "").trim();
 }
 
 function forwardApiRequest(req, res, baseUrl = ormBaseUrl) {
@@ -301,14 +499,36 @@ async function handleApi(req, res) {
     return true;
   }
 
-  if (req.method === "GET" && req.url === "/api/public") {
-    json(res, 200, publicPayload());
+  const url = new URL(req.url, "http://localhost");
+
+  if (req.method === "GET" && url.pathname === "/api/public") {
+    json(res, 200, await publicPayload(req.url));
+    return true;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/events") {
+    const payload = await loadPublicEventsResult(req.url);
+    const sourceEvents = Array.isArray(payload.events) ? payload.events : [];
+    const enrichedEvents = enrichCalendarEventMedia(sourceEvents);
+    json(res, 200, { ...payload, events: enrichedEvents.map((event) => publicEventSummary(event, true)) });
+    return true;
+  }
+
+  const publicMediaMatch = url.pathname.match(/^\/api\/public\/events\/([^/]+)\/media\/(.+)$/);
+  if (req.method === "GET" && publicMediaMatch) {
+    const eventId = decodeURIComponent(publicMediaMatch[1]);
+    const mediaSource = await publicEventMediaSource(eventId, decodeURIComponent(publicMediaMatch[2]));
+    if (isInlineImageReference(mediaSource)) {
+      sendDataUrlMedia(res, mediaSource);
+    } else {
+      json(res, 404, { error: "Media not found" });
+    }
     return true;
   }
 
   if (req.method === "GET" && req.url.startsWith("/api/public/events/")) {
     const eventId = decodeURIComponent(new URL(req.url, "http://localhost").pathname.replace("/api/public/events/", ""));
-    const payload = publicEventDetailPayload(eventId);
+    const payload = await publicEventDetailPayload(eventId);
     json(res, payload ? 200 : 404, payload || { error: "Event not found" });
     return true;
   }

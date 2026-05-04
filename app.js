@@ -12,6 +12,7 @@ let showAddAdultRow = false;
 let showAddPatrolRow = false;
 const defaultEvents = [];
 let events = [];
+const loadedCalendarMonths = new Set();
 let holidays = [];
 const unassignedPatrolValue = "";
 const unassignedPatrolLabel = "Unassigned";
@@ -73,7 +74,10 @@ const imageReactionTypes = ["like", "love", "laugh", "disappointed"];
 const scoutRankOrder = { Eagle: 8, Life: 7, Star: 6, "First Class": 5, "Second Class": 4, Tenderfoot: 3, Scout: 2, "Scout Rank": 2, Bobcat: 1 };
 const eventEditorFieldSelector = "[data-event-edit-title], [data-event-edit-category], [data-event-edit-start], [data-event-edit-end], [data-event-edit-home-base], [data-event-edit-audience], [data-event-edit-description], [data-event-edit-note], [data-event-edit-upcoming], [data-event-edit-repeat-enabled], [data-event-edit-repeat-frequency], [data-event-edit-repeat-interval], [data-event-edit-repeat-until], [data-event-edit-repeat-monthly-pattern], [data-event-edit-repeat-monthly-ordinal], [data-event-edit-repeat-monthly-weekday], [data-gallery-title], [data-gallery-description], [data-activity-description], [data-activity-location], [data-activity-start], [data-activity-end]";
 let eventAutosaveTimer = null;
+let eventEditorSaveStatus = "saved";
+let scoutRecordSaveStatus = "saved";
 let pendingCalendarEventScroll = false;
+const hydratedPublicEventIds = new Set();
 const prototypeToday = new Date();
 const saintJosephLocation = "Saint Joseph Catholic Church - Eldersburg";
 function slugifyName(value) { return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, ""); }
@@ -145,7 +149,7 @@ function normalizeImageComment(comment, index = 0) { return { id: comment?.id ||
 function detectMediaType(value, mimeType = "") { if (String(mimeType).startsWith("video/")) return "video"; if (String(mimeType).startsWith("image/")) return "image"; if (/^data:video\//i.test(String(value || ""))) return "video"; if (/^data:image\//i.test(String(value || ""))) return "image"; if (/\.(mp4|webm|ogg|mov)(\?|#|$)/i.test(String(value || ""))) return "video"; return "image"; }
 function normalizeGalleryItem(item, index = 0) {
   if (typeof item === "string") {
-    return { id: `image-${index + 1}`, src: item, mediaType: detectMediaType(item), title: "", description: "", comments: [], reactions: createEmptyReactions() };
+    return { id: `image-${index + 1}`, src: item, mediaType: detectMediaType(item), title: "", description: "", imageDateTime: "", capturedAt: "", uploadedAt: "", comments: [], reactions: createEmptyReactions() };
   }
   return {
     id: item?.id || `image-${index + 1}`,
@@ -153,27 +157,89 @@ function normalizeGalleryItem(item, index = 0) {
     mediaType: item?.mediaType || detectMediaType(item?.src || item?.image || "", item?.mimeType || ""),
     title: item?.title || "",
     description: item?.description || "",
+    imageDateTime: item?.imageDateTime || item?.capturedAt || item?.dateTaken || "",
+    capturedAt: item?.capturedAt || item?.imageDateTime || item?.dateTaken || "",
+    uploadedAt: item?.uploadedAt || item?.createdAt || item?.datetime || "",
+    originalName: item?.originalName || item?.fileName || "",
+    lastModified: item?.lastModified || "",
     comments: Array.isArray(item?.comments) ? item.comments.map((comment, commentIndex) => normalizeImageComment(comment, commentIndex)) : [],
     reactions: normalizeImageReactions(item?.reactions || item),
   };
 }
-function normalizeEvent(record) { const rawGallery = Array.isArray(record.gallery) ? record.gallery.filter(Boolean) : String(record.gallery || "").split(/\r?\n/).map((image) => image.trim()).filter(Boolean); const image = record.image || (typeof rawGallery[0] === "string" ? rawGallery[0] : rawGallery[0]?.src) || scoutOrgLogo; const homeBase = normalizeEventLocation(record.homeBase || record.location || ""); const activities = Array.isArray(record.activities) ? record.activities.map((activity, index) => normalizeActivity(activity, index)) : []; const gallery = rawGallery.map((item, index) => normalizeGalleryItem(item, index)).filter((item) => item.src); const repeatEnabled = typeof record.repeatEnabled === "boolean" ? record.repeatEnabled : String(record.repeatEnabled).toLowerCase() === "true"; const repeatInterval = Math.max(1, Number(record.repeatInterval) || 1); return { id: record.id, title: record.title || "Untitled event", category: record.category || "Event", startDate: record.startDate || "", endDate: record.endDate || "", dateLabel: record.dateLabel || "", homeBase, location: homeBase, audience: record.audience || "", description: record.description || "", detailNote: record.detailNote || "", activities, image, gallery: gallery.length ? gallery : [normalizeGalleryItem({ src: image }, 0)], upcoming: typeof record.upcoming === "boolean" ? record.upcoming : String(record.upcoming).toLowerCase() === "true", repeatEnabled, repeatFrequency: record.repeatFrequency || "weekly", repeatInterval, repeatUntil: record.repeatUntil || "", repeatMonthlyPattern: record.repeatMonthlyPattern || "date", repeatMonthlyOrdinal: record.repeatMonthlyOrdinal || "third", repeatMonthlyWeekday: record.repeatMonthlyWeekday || "monday" }; }
-function getGalleryImagesFromEditor() { return [...document.querySelectorAll("[data-gallery-item]")].map((item, index) => { const currentEvent = getEventById((window.location.hash || "").replace("#/events/", "")); const existing = currentEvent?.gallery?.find((galleryItem) => galleryItem.id === item.dataset.galleryItem) || normalizeGalleryItem({ src: item.dataset.gallerySrc }, index); const nextDescription = item.querySelector("[data-gallery-description]")?.value.trim() || ""; const nextTitle = nextDescription || item.querySelector("[data-gallery-title]")?.value.trim() || ""; return { ...existing, src: item.dataset.gallerySrc || existing.src, title: nextTitle, description: nextDescription }; }).filter((item) => item.src); }
-function setGalleryImagesInEditor(images) { const galleryItems = images.map((item, index) => normalizeGalleryItem(item, index)); const eventId = (window.location.hash || "").replace("#/events/", ""); const currentEvent = getEventById(eventId); if (currentEvent) { currentEvent.gallery = galleryItems; currentEvent.image = galleryItems[0]?.src || scoutOrgLogo; } }
+function getGalleryItemDateTime(item, index = 0) { const timestamp = Date.parse(item?.imageDateTime || item?.capturedAt || item?.dateTaken || item?.lastModified || item?.uploadedAt || item?.createdAt || item?.datetime || ""); return Number.isFinite(timestamp) ? timestamp : index; }
+function sortGalleryByDateTime(items) { return (Array.isArray(items) ? items : []).map((item, index) => ({ item: normalizeGalleryItem(item, index), index })).filter(({ item }) => item.src).sort((a, b) => getGalleryItemDateTime(a.item, a.index) - getGalleryItemDateTime(b.item, b.index) || a.index - b.index).map(({ item }, index) => ({ ...item, id: item.id || `image-${index + 1}` })); }
+function normalizeEvent(record) { const rawGallery = Array.isArray(record.gallery) ? record.gallery.filter(Boolean) : String(record.gallery || "").split(/\r?\n/).map((image) => image.trim()).filter(Boolean); const image = record.image || (typeof rawGallery[0] === "string" ? rawGallery[0] : rawGallery[0]?.src) || scoutOrgLogo; const homeBase = normalizeEventLocation(record.homeBase || record.location || ""); const activities = Array.isArray(record.activities) ? record.activities.map((activity, index) => normalizeActivity(activity, index)) : []; const gallery = sortGalleryByDateTime(rawGallery.map((item, index) => normalizeGalleryItem(item, index))); const repeatEnabled = typeof record.repeatEnabled === "boolean" ? record.repeatEnabled : String(record.repeatEnabled).toLowerCase() === "true"; const repeatInterval = Math.max(1, Number(record.repeatInterval) || 1); return { id: record.id, title: record.title || "Untitled event", category: record.category || "Event", startDate: record.startDate || "", endDate: record.endDate || "", dateLabel: record.dateLabel || "", homeBase, location: homeBase, audience: record.audience || "", description: record.description || "", detailNote: record.detailNote || "", activities, image, gallery: gallery.length ? gallery : [normalizeGalleryItem({ src: image }, 0)], upcoming: typeof record.upcoming === "boolean" ? record.upcoming : String(record.upcoming).toLowerCase() === "true", repeatEnabled, repeatFrequency: record.repeatFrequency || "weekly", repeatInterval, repeatUntil: record.repeatUntil || "", repeatMonthlyPattern: record.repeatMonthlyPattern || "date", repeatMonthlyOrdinal: record.repeatMonthlyOrdinal || "third", repeatMonthlyWeekday: record.repeatMonthlyWeekday || "monday" }; }
+function getGalleryImagesFromEditor() { return sortGalleryByDateTime([...document.querySelectorAll("[data-gallery-item]")].map((item, index) => { const currentEvent = getEventById((window.location.hash || "").replace("#/events/", "")); const existing = currentEvent?.gallery?.find((galleryItem) => galleryItem.id === item.dataset.galleryItem) || normalizeGalleryItem({ src: item.dataset.gallerySrc }, index); const nextDescription = item.querySelector("[data-gallery-description]")?.value.trim() || ""; const nextTitle = nextDescription || item.querySelector("[data-gallery-title]")?.value.trim() || ""; return { ...existing, src: item.dataset.gallerySrc || existing.src, title: nextTitle, description: nextDescription }; }).filter((item) => item.src)); }
+function setGalleryImagesInEditor(images) { const galleryItems = sortGalleryByDateTime(images); const eventId = (window.location.hash || "").replace("#/events/", ""); const currentEvent = getEventById(eventId); if (currentEvent) { currentEvent.gallery = galleryItems; if (!galleryItems.some((item) => item.src === currentEvent.image)) currentEvent.image = galleryItems[0]?.src || scoutOrgLogo; } }
+function parseExifDateTime(value) {
+  const match = String(value || "").trim().match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if (!match) return "";
+  const [, year, month, day, hour, minute, second] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second));
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+function readExifAscii(dataView, tiffStart, entryOffset, littleEndian) {
+  const type = dataView.getUint16(entryOffset + 2, littleEndian);
+  const count = dataView.getUint32(entryOffset + 4, littleEndian);
+  if (type !== 2 || !count) return "";
+  const valueOffset = count <= 4 ? entryOffset + 8 : tiffStart + dataView.getUint32(entryOffset + 8, littleEndian);
+  if (valueOffset < 0 || valueOffset + count > dataView.byteLength) return "";
+  let value = "";
+  for (let index = 0; index < count; index += 1) {
+    const charCode = dataView.getUint8(valueOffset + index);
+    if (!charCode) break;
+    value += String.fromCharCode(charCode);
+  }
+  return value;
+}
+function readExifIfd(dataView, tiffStart, ifdOffset, littleEndian) {
+  const offset = tiffStart + ifdOffset;
+  if (offset < 0 || offset + 2 > dataView.byteLength) return {};
+  const tags = {};
+  const entries = dataView.getUint16(offset, littleEndian);
+  for (let index = 0; index < entries; index += 1) {
+    const entryOffset = offset + 2 + index * 12;
+    if (entryOffset + 12 > dataView.byteLength) break;
+    const tag = dataView.getUint16(entryOffset, littleEndian);
+    if (tag === 0x0132 || tag === 0x9003 || tag === 0x9004) tags[tag] = readExifAscii(dataView, tiffStart, entryOffset, littleEndian);
+    if (tag === 0x8769) tags.exifIfdOffset = dataView.getUint32(entryOffset + 8, littleEndian);
+  }
+  return tags;
+}
+async function readImageDateTime(file) {
+  const lastModified = file?.lastModified ? new Date(file.lastModified).toISOString() : "";
+  if (!/^image\/jpe?g$/i.test(String(file?.type || "")) || !file?.slice) return lastModified;
+  try {
+    const buffer = await file.slice(0, 262144).arrayBuffer();
+    const dataView = new DataView(buffer);
+    if (dataView.getUint16(0) !== 0xffd8) return lastModified;
+    let offset = 2;
+    while (offset + 4 < dataView.byteLength) {
+      if (dataView.getUint8(offset) !== 0xff) break;
+      const marker = dataView.getUint8(offset + 1);
+      const segmentLength = dataView.getUint16(offset + 2);
+      if (marker === 0xe1 && offset + 4 + segmentLength <= dataView.byteLength) {
+        const exifHeader = [0, 1, 2, 3, 4, 5].map((index) => String.fromCharCode(dataView.getUint8(offset + 4 + index))).join("");
+        if (exifHeader === "Exif\0\0") {
+          const tiffStart = offset + 10;
+          const littleEndian = dataView.getUint16(tiffStart) === 0x4949;
+          if (dataView.getUint16(tiffStart + 2, littleEndian) !== 42) return lastModified;
+          const firstIfdOffset = dataView.getUint32(tiffStart + 4, littleEndian);
+          const rootTags = readExifIfd(dataView, tiffStart, firstIfdOffset, littleEndian);
+          const exifTags = rootTags.exifIfdOffset ? readExifIfd(dataView, tiffStart, rootTags.exifIfdOffset, littleEndian) : {};
+          return parseExifDateTime(exifTags[0x9003] || exifTags[0x9004] || rootTags[0x0132]) || lastModified;
+        }
+      }
+      offset += 2 + segmentLength;
+    }
+  } catch (error) {}
+  return lastModified;
+}
 function readFileAsDataUrl(file) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve({ src: String(reader.result || ""), mediaType: detectMediaType(reader.result, file.type) }); reader.onerror = () => reject(reader.error || new Error("Could not read file")); reader.readAsDataURL(file); }); }
 function storePatrolsSnapshot() {
   try {
     window.localStorage.setItem("troop883-patrols", JSON.stringify(patrols.map(serializePatrol)));
   } catch (error) {}
-}
-function loadStoredPatrols() {
-  try {
-    const raw = window.localStorage.getItem("troop883-patrols");
-    const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed.map(normalizePatrol).filter((patrol) => patrol.name) : [];
-  } catch (error) {
-    return [];
-  }
 }
 function storeEventsSnapshot() {
   try {
@@ -189,7 +255,35 @@ function storeEventsSnapshot() {
   }
   return true;
 }
-async function saveEvents() { await postJson("/api/events", { events: events.map((event) => ({ ...event })) }); storeEventsSnapshot(); }
+async function saveEvents() {
+  events = events.map((event) => {
+    const gallery = sortGalleryByDateTime(event.gallery || []);
+    const image = gallery.some((item) => item.src === event.image) ? event.image : gallery[0]?.src || event.image || scoutOrgLogo;
+    return { ...event, image, gallery };
+  });
+  await postJson("/api/events", { events: events.map((event) => ({ ...event })) });
+  storeEventsSnapshot();
+}
+function eventEditorStatusLabel(status = eventEditorSaveStatus) {
+  return status === "dirty" ? "Dirty" : status === "saving" ? "Saving" : "Saved";
+}
+function setEventEditorSaveStatus(status) {
+  eventEditorSaveStatus = status;
+  const indicator = document.querySelector("[data-event-save-status]");
+  if (!indicator) return;
+  indicator.dataset.eventSaveStatus = status;
+  indicator.textContent = eventEditorStatusLabel(status);
+}
+function scoutRecordStatusLabel(status = scoutRecordSaveStatus) {
+  return status === "dirty" ? "Dirty" : status === "saving" ? "Saving" : "Saved";
+}
+function setScoutRecordSaveStatus(status) {
+  scoutRecordSaveStatus = status;
+  const indicator = document.querySelector("[data-scout-save-status]");
+  if (!indicator) return;
+  indicator.dataset.scoutSaveStatus = status;
+  indicator.textContent = scoutRecordStatusLabel(status);
+}
 function syncEventFromEditor(eventId) {
   const event = getEventById(eventId);
   if (!event) return null;
@@ -227,18 +321,27 @@ function syncEventFromEditor(eventId) {
     }, index);
   });
   if (nextGallery.length) {
-    event.gallery = nextGallery;
-    event.image = nextGallery[0]?.src || scoutOrgLogo;
+    event.gallery = sortGalleryByDateTime(nextGallery);
+    if (!event.gallery.some((item) => item.src === event.image)) event.image = event.gallery[0]?.src || scoutOrgLogo;
   }
   return event;
 }
 function queueEventAutosave(eventId, delay = 500) {
   if (!eventId || !canSeeOrgChart()) return;
+  setEventEditorSaveStatus("dirty");
   if (eventAutosaveTimer) window.clearTimeout(eventAutosaveTimer);
   eventAutosaveTimer = window.setTimeout(async () => {
-    syncEventFromEditor(eventId);
-    await saveEvents();
-    eventAutosaveTimer = null;
+    try {
+      setEventEditorSaveStatus("saving");
+      syncEventFromEditor(eventId);
+      await saveEvents();
+      setEventEditorSaveStatus("saved");
+    } catch (error) {
+      setEventEditorSaveStatus("dirty");
+      throw error;
+    } finally {
+      eventAutosaveTimer = null;
+    }
   }, delay);
 }
 async function flushEventAutosave(eventId) {
@@ -247,10 +350,42 @@ async function flushEventAutosave(eventId) {
     window.clearTimeout(eventAutosaveTimer);
     eventAutosaveTimer = null;
   }
-  syncEventFromEditor(eventId);
-  await saveEvents();
+  setEventEditorSaveStatus("saving");
+  try {
+    syncEventFromEditor(eventId);
+    await saveEvents();
+    setEventEditorSaveStatus("saved");
+  } catch (error) {
+    setEventEditorSaveStatus("dirty");
+    throw error;
+  }
 }
-function loadEvents(initialEvents = []) { if (initialEvents.length) { events = initialEvents.map(normalizeEvent); storeEventsSnapshot(); return; } try { const saved = window.localStorage.getItem("troop883-events"); events = saved ? JSON.parse(saved).map(normalizeEvent) : []; } catch (error) { events = []; } }
+function loadEvents(initialEvents = []) {
+  events = Array.isArray(initialEvents) ? initialEvents.map(normalizeEvent) : [];
+  storeEventsSnapshot();
+}
+function hasPrimaryEventMedia(event) {
+  const image = String(event?.image || "").trim();
+  const gallery = Array.isArray(event?.gallery) ? event.gallery : [];
+  return Boolean(image && image !== scoutOrgLogo) || gallery.some((item) => {
+    const src = normalizeGalleryItem(item).src;
+    return src && src !== scoutOrgLogo;
+  });
+}
+function mergeLoadedEvents(incomingEvents = []) {
+  const nextEventsById = new Map(events.map((event) => [String(event.id), event]));
+  incomingEvents.map(normalizeEvent).forEach((event) => {
+    if (!event.id) return;
+    const existing = nextEventsById.get(String(event.id));
+    if (existing && hasPrimaryEventMedia(existing) && !hasPrimaryEventMedia(event)) {
+      nextEventsById.set(String(event.id), { ...event, image: existing.image, gallery: existing.gallery });
+      return;
+    }
+    nextEventsById.set(String(event.id), event);
+  });
+  events = [...nextEventsById.values()];
+  storeEventsSnapshot();
+}
 function getEventById(eventId) { return events.find((event) => event.id === eventId); }
 function mapUrlForLocation(location) { return `https://www.google.com/maps?q=${encodeURIComponent(normalizeEventLocation(location))}&output=embed`; }
 function directionsUrlForLocation(location) { return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(normalizeEventLocation(location))}`; }
@@ -287,7 +422,7 @@ function isSandyPointEvent(event) {
   return homeBase.includes("sandy point state park");
 }
 function getWalkersvilleDefaultGalleryItem() {
-  const sourceEvent = events.find((event) => isWalkersvilleEvent(event) && String(event?.startDate || "").startsWith("2026-04-09"));
+  const sourceEvent = events.find((event) => isWalkersvilleEvent(event) && hasPrimaryEventMedia(event));
   if (!sourceEvent) return null;
   if (sourceEvent.image) {
     const sourcePrimary = (sourceEvent.gallery || []).find((item) => normalizeGalleryItem(item).src === sourceEvent.image);
@@ -301,7 +436,12 @@ function getSandyPointDefaultGalleryItem() {
   return normalizeGalleryItem({ src: "https://dnr.maryland.gov/publiclands/PublishingImages/sandy-point-drone-photo.jpg", title: "Sandy Point State Park", description: "Sandy Point State Park" }, 0);
 }
 function getDisplayMediaItems(event) {
-  const mediaItems = event?.gallery?.length ? event.gallery.map((item, index) => normalizeGalleryItem(item, index)) : [normalizeGalleryItem({ src: event?.image }, 0)];
+  const mediaItems = event?.gallery?.length ? sortGalleryByDateTime(event.gallery) : [normalizeGalleryItem({ src: event?.image }, 0)];
+  const primaryIndex = mediaItems.findIndex((item) => item.src === event?.image);
+  if (primaryIndex > 0) {
+    const [primaryItem] = mediaItems.splice(primaryIndex, 1);
+    mediaItems.unshift(primaryItem);
+  }
   if (isSandyPointEvent(event)) {
     const sandyPointDefault = getSandyPointDefaultGalleryItem();
     return [sandyPointDefault, ...mediaItems.filter((item) => item?.src && item.src !== sandyPointDefault.src)];
@@ -408,7 +548,7 @@ function getSortedEvents() { return [...events].sort((a, b) => (parseEventStartD
 function getSelectedEventMonth() {
   const months = getEventMonths();
   const saved = window.localStorage.getItem("troop883-events-month");
-  if (saved && months.includes(saved)) return saved;
+  if (saved && /^\d{4}-\d{2}$/.test(saved)) return saved;
   const todayMonth = getMonthKeyForDate(prototypeToday);
   if (months.includes(todayMonth)) return todayMonth;
   const nextUpcoming = getSortedEvents().find((event) => isUpcomingEvent(event));
@@ -423,20 +563,40 @@ function getSelectedCalendarDate() { return window.localStorage.getItem("troop88
 function setSelectedCalendarDate(dateKey) { if (dateKey) window.localStorage.setItem("troop883-selected-date", dateKey); }
 function getSelectedCalendarEventId() { return window.localStorage.getItem("troop883-selected-event-id") || ""; }
 function setSelectedCalendarEventId(eventId) { if (eventId) { window.localStorage.setItem("troop883-selected-event-id", eventId); return; } window.localStorage.removeItem("troop883-selected-event-id"); }
-async function hydratePublicCalendarEventMedia(eventId) {
+async function hydratePublicCalendarEventMedia(eventId, { force = false } = {}) {
   if (!eventId || sessionToken) return;
   const event = getEventById(eventId);
-  if (!event || (event.image && event.image !== scoutOrgLogo && (event.gallery || []).some((item) => normalizeGalleryItem(item).src === event.image))) return;
+  if (!event) return;
+  if (!force && event.image && event.image !== scoutOrgLogo && (event.gallery || []).some((item) => normalizeGalleryItem(item).src === event.image)) return;
   try {
     const response = await fetch(`/api/public/events/${encodeURIComponent(eventId)}`, { cache: "no-store" });
     if (!response.ok) return;
     const payload = await response.json();
     const hydrated = normalizeEvent(payload.data || payload);
     const target = getEventById(eventId);
-    if (!target) return;
+    if (!target) {
+      mergeLoadedEvents([hydrated]);
+      return;
+    }
     target.image = hydrated.image || target.image;
     target.gallery = hydrated.gallery?.length ? hydrated.gallery : target.gallery;
+    hydratedPublicEventIds.add(String(eventId));
   } catch (error) {}
+}
+async function hydrateLandingEventWindowMedia() {
+  if (sessionToken || !["#/", "", "#"].includes(window.location.hash || "#/")) return;
+  const eventIds = getLandingEventWindow().map((event) => event.id).filter(Boolean);
+  const pendingIds = eventIds.filter((eventId) => !hydratedPublicEventIds.has(String(eventId)));
+  if (!pendingIds.length) return;
+  await Promise.all(pendingIds.map((eventId) => hydratePublicCalendarEventMedia(eventId, { force: true })));
+  if (!["#/", "", "#"].includes(window.location.hash || "#/")) return;
+  rebuildDerivedData();
+  renderRoute();
+}
+function getEventDetailRouteId() {
+  const hash = window.location.hash || "";
+  if (!hash.startsWith("#/events/") || hash === "#/events/calendar" || hash === "#/events/list") return "";
+  return hash.replace("#/events/", "");
 }
 function scrollSelectedCalendarEventIntoView() {
   const scrollToShowcase = () => {
@@ -658,12 +818,19 @@ function renderGalleryImageCard(event, image, index, editable) {
   const mediaLabel = image.mediaType === "video" ? "video" : "image";
   const displayTitle = getGalleryDisplayTitle(event, image, index);
   const displayDescription = image.description || (editable ? "Add a short caption or context for this image." : "No image description yet.");
-  return `<figure class="event-gallery-item${editable ? " event-gallery-item-editable image-social-card" : " image-social-card"}" data-gallery-item="${image.id}" data-gallery-src="${image.src}">${renderGalleryMedia(image, displayTitle)}${editable ? `<figcaption><input type="text" data-gallery-title="${image.id}" value="${displayTitle}" placeholder="${image.mediaType === "video" ? "Video title" : "Image title"}" aria-label="Title for ${mediaLabel} ${index + 1}" /><textarea data-gallery-description="${image.id}" placeholder="${image.mediaType === "video" ? "Video description" : "Image description"}" aria-label="Description for ${mediaLabel} ${index + 1}">${image.description}</textarea><p class="gallery-primary-note">${index === 0 ? "Primary event image" : "Choose this item only if you want it to become the primary event image."}</p><div class="gallery-item-actions"><button class="button secondary gallery-action-button" type="button" data-make-primary-image="${image.id}">${index === 0 ? "Primary event image" : "Set as primary event image"}</button><button class="button danger gallery-action-button" type="button" data-remove-gallery-image="${index}">Remove</button></div>${renderImageReactionButtons(image)}${renderImageComments(image)}</figcaption>` : `<figcaption><strong>${displayTitle}</strong><p>${displayDescription}</p>${renderImageReactionButtons(image)}${renderImageComments(image)}</figcaption>`}</figure>`;
+  return `<figure class="event-gallery-item${editable ? " event-gallery-item-editable image-social-card" : " image-social-card"}" data-gallery-item="${image.id}" data-gallery-src="${image.src}">${renderGalleryMedia(image, displayTitle)}${editable ? `<figcaption><input type="text" data-gallery-title="${image.id}" value="${displayTitle}" placeholder="${image.mediaType === "video" ? "Video title" : "Image title"}" aria-label="Title for ${mediaLabel} ${index + 1}" /><textarea data-gallery-description="${image.id}" placeholder="${image.mediaType === "video" ? "Video description" : "Image description"}" aria-label="Description for ${mediaLabel} ${index + 1}">${image.description}</textarea><p class="gallery-primary-note">${index === 0 ? "Primary event image" : "Choose this item only if you want it to become the primary event image."}</p><div class="gallery-item-actions"><button class="button secondary gallery-action-button" type="button" data-make-primary-image="${image.id}">${index === 0 ? "Primary event image" : "Set as primary event image"}</button><button class="button danger gallery-action-button" type="button" data-remove-gallery-image="${image.id}">Remove</button></div>${renderImageReactionButtons(image)}${renderImageComments(image)}</figcaption>` : `<figcaption><strong>${displayTitle}</strong><p>${displayDescription}</p>${renderImageReactionButtons(image)}${renderImageComments(image)}</figcaption>`}</figure>`;
 }
 function getGalleryImageById(event, imageId) { return (event.gallery || []).find((image) => image.id === imageId) || null; }
 function buildCalendarCells(monthKey) { const [year, month] = monthKey.split("-").map(Number); const firstDay = new Date(year, month - 1, 1); const daysInMonth = new Date(year, month, 0).getDate(); const startOffset = firstDay.getDay(); const eventsByDay = new Map(); for (let day = 1; day <= daysInMonth; day += 1) { const currentDate = new Date(year, month - 1, day); eventsByDay.set(day, events.filter((event) => eventOccursOnDate(event, currentDate)).sort((a, b) => (parseEventStartDate(a)?.getTime() || 0) - (parseEventStartDate(b)?.getTime() || 0))); } const cells = []; for (let index = 0; index < startOffset; index += 1) cells.push({ empty: true, key: `empty-${index}` }); for (let day = 1; day <= daysInMonth; day += 1) cells.push({ empty: false, day, events: eventsByDay.get(day) || [], key: `day-${day}` }); while (cells.length % 7 !== 0) cells.push({ empty: true, key: `tail-${cells.length}` }); return cells; }
 function formatEventListDate(event) { const date = parseEventStartDate(event); return date ? date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : event.dateLabel; }
-function getRollingEventList(direction) { const today = new Date(prototypeToday); today.setHours(0, 0, 0, 0); const windowMs = 21 * 24 * 60 * 60 * 1000; return events.filter((event) => { const date = parseEventStartDate(event); if (!date) return false; const time = date.getTime(); if (direction === "past") return time < today.getTime() && time >= today.getTime() - windowMs; return time >= today.getTime() && time <= today.getTime() + windowMs; }).sort((a, b) => direction === "past" ? (parseEventStartDate(b)?.getTime() || 0) - (parseEventStartDate(a)?.getTime() || 0) : (parseEventStartDate(a)?.getTime() || 0) - (parseEventStartDate(b)?.getTime() || 0)).slice(0, 3); }
+function addMonths(date, months) { const next = new Date(date); const day = next.getDate(); next.setMonth(next.getMonth() + months); if (next.getDate() !== day) next.setDate(0); return next; }
+function getEventRangeStart() { return startOfDay(addMonths(prototypeToday, -2)); }
+function getEventRangeEnd() { const end = addMonths(prototypeToday, 2); end.setHours(23, 59, 59, 999); return end; }
+function getRollingEventList(direction) { const today = startOfDay(prototypeToday); const rangeStart = getEventRangeStart(); const rangeEnd = getEventRangeEnd(); return events.filter((event) => { const date = parseEventStartDate(event); if (!date) return false; const time = date.getTime(); if (direction === "past") return time < today.getTime() && time >= rangeStart.getTime(); return time >= today.getTime() && time <= rangeEnd.getTime(); }).sort((a, b) => direction === "past" ? (parseEventStartDate(b)?.getTime() || 0) - (parseEventStartDate(a)?.getTime() || 0) : (parseEventStartDate(a)?.getTime() || 0) - (parseEventStartDate(b)?.getTime() || 0)).slice(0, 3); }
+function getLandingEventWindow() { const rangeStart = getEventRangeStart(); const rangeEnd = getEventRangeEnd(); return getSortedEvents().filter((event) => { const start = parseEventStartDate(event); const end = parseEventEndDate(event) || start; if (!start || !end) return false; return start.getTime() <= rangeEnd.getTime() && end.getTime() >= rangeStart.getTime(); }); }
+function getCurrentEventIndex(items) { const today = startOfDay(prototypeToday).getTime(); const upcomingIndex = items.findIndex((event) => (parseEventStartDate(event)?.getTime() || 0) >= today); return upcomingIndex >= 0 ? upcomingIndex : Math.max(0, items.length - 1); }
+function requestUpcomingScrollerCenter() { window.requestAnimationFrame(() => { const scroller = document.querySelector("[data-upcoming-scroller]"); const target = document.querySelector("[data-upcoming-current]"); if (!scroller || !target) return; const vertical = scroller.scrollHeight > scroller.clientHeight && scroller.scrollWidth <= scroller.clientWidth + 4; if (vertical) { scroller.scrollTop = target.offsetTop - ((scroller.clientHeight - target.clientHeight) / 2); return; } scroller.scrollLeft = target.offsetLeft - ((scroller.clientWidth - target.clientWidth) / 2); }); }
+function scrollUpcomingEvents(direction) { const scroller = document.querySelector("[data-upcoming-scroller]"); const current = document.querySelector("[data-upcoming-current]") || scroller?.querySelector("[data-upcoming-card]"); if (!scroller || !current) return; const step = Math.round((current.getBoundingClientRect().width || 320) + 20); const vertical = scroller.scrollHeight > scroller.clientHeight && scroller.scrollWidth <= scroller.clientWidth + 4; scroller.scrollBy({ left: vertical ? 0 : direction * step, top: vertical ? direction * step : 0, behavior: "smooth" }); }
 function getEventDetailPreviewEvents() {
   const sortedEvents = getSortedEvents();
   const recentEvents = sortedEvents.filter((event) => !isUpcomingEvent(event)).slice(-2);
@@ -1143,16 +1310,69 @@ function nextHolidayId() { const max = holidays.reduce((highest, holiday) => { c
 function getHolidayById(holidayId) { return holidays.find((holiday) => holiday.id === holidayId); }
 function getSortedHolidays() { return [...holidays].sort((a, b) => (parseDateKey(a.date)?.getTime() || 0) - (parseDateKey(b.date)?.getTime() || 0) || a.name.localeCompare(b.name)); }
 function formatHolidayDateRange(holiday) { if (!holiday?.date) return "Date not set"; if (!holiday.endDate || holiday.endDate === holiday.date) return formatFullDate(holiday.date); return `${formatFullDate(holiday.date)} - ${formatFullDate(holiday.endDate)}`; }
+function publicEventsUrl() { const params = new URLSearchParams({ startDate: formatDateKey(getEventRangeStart()), endDate: formatDateKey(getEventRangeEnd()), page: "1", pageSize: "100" }); return `/api/public?${params.toString()}`; }
+function getCalendarMonthRange(monthKey) {
+  const [year, month] = String(monthKey || "").split("-").map(Number);
+  if (!year || !month) return null;
+  return {
+    startDate: formatDateKey(new Date(year, month - 1, 1)),
+    endDate: formatDateKey(new Date(year, month, 0)),
+  };
+}
+function calendarEventsUrl(monthKey) {
+  const range = getCalendarMonthRange(monthKey);
+  if (!range) return "";
+  const params = new URLSearchParams({ ...range, page: "1", pageSize: "100" });
+  return `/api/events?${params.toString()}`;
+}
+async function loadCalendarMonthEvents(monthKey) {
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || "")) || loadedCalendarMonths.has(monthKey)) return;
+  const response = await fetch(calendarEventsUrl(monthKey), { cache: "no-store", headers: authHeaders() });
+  if (!response.ok) throw new Error(`Could not load events for ${monthKey}`);
+  const payload = await response.json();
+  const incomingEvents = Array.isArray(payload.events) ? payload.events : Array.isArray(payload.data?.events) ? payload.data.events : [];
+  mergeLoadedEvents(incomingEvents);
+  loadedCalendarMonths.add(monthKey);
+  rebuildDerivedData();
+}
+async function openCalendarMonth(monthKey, dateKey = "") {
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || ""))) return;
+  const selectedDate = getSelectedCalendarDate();
+  setSelectedEventMonth(monthKey);
+  setSelectedCalendarDate(dateKey || (selectedDate.startsWith(monthKey) ? selectedDate : `${monthKey}-01`));
+  try {
+    await loadCalendarMonthEvents(monthKey);
+  } catch (error) {
+    console.warn(error);
+  }
+  renderRoute();
+}
 async function loadEventData(fallbackEvents = []) { return Array.isArray(fallbackEvents) ? fallbackEvents : []; }
+function resetOrmBackedData() {
+  scouts = [];
+  adults = [];
+  adultLeaders = [];
+  adultScoutRelationships = [];
+  patrols = [];
+  roster = [];
+  groupedByPatrol = [];
+  savedParentGuardians = [];
+  scoutLeadershipGroups = [];
+  events = [];
+  holidays = [];
+  loadedCalendarMonths.clear();
+  hydratedPublicEventIds.clear();
+}
 async function loadData() {
+  resetOrmBackedData();
   let data = {};
   let loadError = null;
 
   try {
     await loadCurrentActor();
-    const response = await fetch(sessionToken ? "/api/me/dashboard" : "/api/public", { cache: "no-store", headers: authHeaders() });
+    const response = await fetch(sessionToken ? "/api/me/dashboard" : publicEventsUrl(), { cache: "no-store", headers: authHeaders() });
     if (!response.ok) {
-      throw new Error("Could not load troop data(" + response + ")");
+      throw new Error("Requested troop data is not available for this account.");
     }
     const payload = await response.json();
     if (payload.actor) currentActor = payload.actor;
@@ -1169,18 +1389,24 @@ async function loadData() {
   adultLeaders = (Array.isArray(data.adultLeaders) ? data.adultLeaders : []).map(normalizeAdultLeader);
   adultScoutRelationships = (Array.isArray(data.adultScoutRelationships) ? data.adultScoutRelationships : []).map(normalizeAdultScoutRelationship);
   holidays = (Array.isArray(data.holidays) ? data.holidays : []).map(normalizeHoliday).filter((holiday) => holiday.date);
-  const storedPatrols = loadStoredPatrols();
-  patrols = uniqueBy(((Array.isArray(data.patrols) && data.patrols.length ? data.patrols : storedPatrols)).map(normalizePatrol).filter((patrol) => patrol.name), (patrol) => patrol.name.toLowerCase());
+  patrols = uniqueBy((Array.isArray(data.patrols) ? data.patrols : []).map(normalizePatrol).filter((patrol) => patrol.name), (patrol) => patrol.name.toLowerCase());
 
   const incomingEvents = (await loadEventData(Array.isArray(data.events) ? data.events : [])).map(normalizeEvent);
   loadEvents(incomingEvents);
   rebuildDerivedData();
+  if ((window.location.hash || "").startsWith("#/events/calendar")) {
+    await loadCalendarMonthEvents(getSelectedEventMonth());
+  }
+  const detailEventId = getEventDetailRouteId();
+  if (detailEventId) {
+    await hydratePublicCalendarEventMedia(detailEventId);
+  }
 
   if (!getActiveScoutId() && roster[0]?.id) {
     setActiveScoutId(roster[0].id);
   }
 
-  if (loadError && !incomingEvents.length) {
+  if (loadError && !incomingEvents.length && sessionToken) {
     throw loadError;
   }
 }
@@ -1218,24 +1444,31 @@ function renderScoutsRoute() {
   app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scouts</p><h2>Scout records</h2><p class="intro compact">Adult leaders can review every scout, open the editable scout record, and see patrol, rank, leadership, and linked adult information.</p></div><div class="status-chip"><span>Route</span><strong>/scouts</strong></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Directory</p><div class="all-scouts-title-row"><h2>All scouts</h2><div class="inline-filter"><label><span>Filter scouts</span><input type="search" data-scout-filter placeholder="Name, patrol, or rank" aria-label="Filter scouts by name, patrol, or rank" /></label><p class="section-copy" data-scout-filter-count>${roster.length} scout records</p></div></div></div><div class="directory-tools"><div class="scribe-actions"><a class="button secondary" href="#/patrols">Manage patrols</a><a class="button secondary" href="#/org-chart/edit-scouts">Edit scout org chart</a></div></div></div><div class="panel"><div class="panel-heading"><h3>${roster.length} scout records</h3><p>Open any scout to edit details, patrol assignment, and leadership position.</p></div><div class="table-wrap"><table class="data-table scout-directory-table" data-scout-filter-scope><thead><tr><th aria-label="Actions"></th><th>Scout</th><th>Patrol</th><th>Rank</th><th>Linked adults</th></tr></thead><tbody>${sortScoutsByRankWithinPatrol(roster).map((scout) => { const patrolName = getPatrolDisplayName(scout.patrol); const scoutLabel = getScoutDirectoryName(scout); return `<tr data-scout-filter-item data-scout-name="${`${scout.name} ${getScoutNickname(scout)}`.toLowerCase()}" data-scout-patrol="${patrolName.toLowerCase()}" data-scout-rank="${String(scout.rank || "").toLowerCase()}"><td>${renderScoutDirectoryActionCell(scout)}</td><td>${renderScoutDirectoryNameCell(scout, scoutLabel)}</td><td>${patrolName}</td><td>${scout.rank}</td><td>${scout.parents.length ? `<div class="adult-children-list compact">${scout.parents.map((parent) => `<span class="child-chip"><a class="text-link" href="#/adults/${parent.adultId}">${parent.relationship}: ${parent.name}</a></span>`).join("")}</div>` : "No linked adults"}</td></tr>`; }).join("")}</tbody></table></div></div></section>${renderAdultScoutRosterPanel({ showFilter: false })}`;
 }
 function renderResourcesRoute() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Resources</p><h2>Downloadable troop resources</h2><p class="intro compact">Printable and editable files families can save for merit badge preparation.</p></div><div class="status-chip"><span>Route</span><strong>/resources</strong></div></section><section class="section"><div class="panel"><div class="panel-heading"><h3>Chess Merit Badge readiness checklist</h3><p>Use the PDF for printing or the Markdown file for editing.</p></div><div class="scribe-actions"><a class="button secondary" href="resources/chess_merit_badge_checklist.pdf" download>Download PDF</a><a class="button secondary" href="resources/chess_merit_badge_checklist.md" download>Download Markdown</a></div></div></section>`; }
+function renderLandingScrollerCard(event, index, currentIndex) {
+  const mediaItems = getDisplayMediaItems(event);
+  const isCurrent = index === currentIndex;
+  return `<article class="event-card landing-event-card${isAdultEvent(event) ? " adult-event-theme" : ""}${isCurrent ? " is-current" : ""}" data-upcoming-card="${index}"${isCurrent ? " data-upcoming-current" : ""}><div class="image-wrap">${mediaItems.length > 1 ? `<div class="carousel" data-index="0"><div class="carousel-track">${mediaItems.map((item, mediaIndex) => renderEventCardMedia(event, item, mediaIndex, mediaIndex === 0)).join("")}</div><button class="carousel-button prev" type="button" aria-label="Previous media">&#8249;</button><button class="carousel-button next" type="button" aria-label="Next media">&#8250;</button><div class="carousel-dots">${mediaItems.map((_, mediaIndex) => `<button class="carousel-dot${mediaIndex === 0 ? " is-active" : ""}" type="button" data-slide="${mediaIndex}" aria-label="Go to media ${mediaIndex + 1}"></button>`).join("")}</div></div>` : renderEventCardMedia(event, mediaItems[0], 0, null)}<span class="category-pill">${event.category}</span></div><div class="event-content"><p class="event-date">${event.dateLabel || formatEventListDate(event)}</p><h3><a class="text-link" href="#/events/${event.id}">${event.title}</a></h3><p class="event-description">${event.description || "More troop event details are coming soon."}</p><div class="event-meta"><span>${event.location || event.homeBase || "Location TBD"}</span><span>${event.audience || "Troop"}</span></div><a class="button primary landing-event-button" href="#/events/${event.id}">View details</a></div></article>`;
+}
 function renderPublic() {
   const sortedEvents = getSortedEvents();
   const upcoming = sortedEvents.filter((event) => isUpcomingEvent(event));
-  const recent = sortedEvents.filter((event) => !isUpcomingEvent(event));
   const nextEvent = upcoming[0] || null;
-  const latestRecent = recent[recent.length - 1];
-  const featuredRecent = latestRecent ? [latestRecent] : [];
-  const featuredUpcoming = nextEvent ? [nextEvent] : [];
-  const priorThreeWeeks = getRollingEventList("past");
-  const nextThreeWeeks = getRollingEventList("future");
   const nextEventLocation = nextEvent?.location || nextEvent?.homeBase || "";
+  const landingEvents = getLandingEventWindow();
+  const currentEventIndex = getCurrentEventIndex(landingEvents);
+  const rangeLabel = `${getEventRangeStart().toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${getEventRangeEnd().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
 
-  app.innerHTML = `${topNav()}<section class="hero"><div class="hero-copy"><p class="eyebrow">Public landing page</p><h2>Adventure, leadership, and a troop community that families can join.</h2><p>This non-logged-in version highlights the most recent and upcoming events, presents event imagery, and invites families to explore the full event details.</p></div><div class="hero-card"><p class="hero-card-label">Next upcoming event</p><h3>${nextEvent ? `<a class="text-link" href="#/events/${nextEvent.id}">${nextEvent.title}</a>` : "No event scheduled"}</h3><p class="hero-event-meta">${nextEvent ? `${nextEvent.dateLabel} &bull; ${nextEvent.location}` : "Check back soon for the next troop event."}</p><p>${nextEvent ? nextEvent.description : "The troop calendar is ready for the next event update."}</p>${nextEventLocation ? `<div class="hero-card-map"><div class="hero-card-map-frame"><iframe class="hero-card-map-embed" src="${mapUrlForLocation(nextEventLocation)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${nextEventLocation}"></iframe><a class="hero-card-map-overlay" href="${directionsUrlForLocation(nextEventLocation)}" target="_blank" rel="noreferrer" aria-label="Open directions to ${nextEventLocation}"><span>Directions</span></a></div><a class="hero-card-map-link" href="${directionsUrlForLocation(nextEventLocation)}" target="_blank" rel="noreferrer">Open directions to ${nextEventLocation}</a></div>` : ""}</div></section><section class="section feature-grid"><div class="feature-column" id="recent-events"><div class="section-heading"><div><p class="eyebrow">Recent</p><h2>Recent troop highlights</h2></div><p class="section-copy">A featured recent event with multiple photos.</p></div><div class="event-grid">${featuredRecent.map(renderEventCard).join("")}</div><div class="panel rolling-events"><div class="panel-heading"><h3>Previous three weeks</h3><p>Up to three recent events in descending date order.</p></div><ul class="detail-list">${priorThreeWeeks.map((event) => `<li><a class="text-link" href="#/events/${event.id}">${event.title}</a> <span class="rolling-event-date">${formatEventListDate(event)}</span></li>`).join("") || "<li>No previous events in this window.</li>"}</ul></div></div><div class="feature-column" id="upcoming-events"><div class="section-heading"><div><p class="eyebrow">Upcoming</p><h2>What is next for the troop</h2></div><p class="section-copy">The next featured upcoming event for the troop.</p></div><div class="event-grid">${featuredUpcoming.map(renderEventCard).join("")}</div><div class="panel rolling-events"><div class="panel-heading"><h3>Next three weeks</h3><p>Up to three upcoming events in date order.</p></div><ul class="detail-list">${nextThreeWeeks.map((event) => `<li><a class="text-link" href="#/events/${event.id}">${event.title}</a> <span class="rolling-event-date">${formatEventListDate(event)}</span></li>`).join("") || "<li>No upcoming events in this window.</li>"}</ul></div></div></section>`;
+  app.innerHTML = `${topNav()}<section class="hero"><div class="hero-copy"><p class="eyebrow">Public landing page</p><h2>Adventure, leadership, and a troop community that families can join.</h2><p>This non-logged-in version highlights troop events in a two-month window on either side of today, presents event imagery, and invites families to explore the full event details.</p></div><div class="hero-card"><p class="hero-card-label">Next upcoming event</p><h3>${nextEvent ? `<a class="text-link" href="#/events/${nextEvent.id}">${nextEvent.title}</a>` : "No event scheduled"}</h3><p class="hero-event-meta">${nextEvent ? `${nextEvent.dateLabel} &bull; ${nextEvent.location}` : "Check back soon for the next troop event."}</p><p>${nextEvent ? nextEvent.description : "The troop calendar is ready for the next event update."}</p>${nextEventLocation ? `<div class="hero-card-map"><div class="hero-card-map-frame"><iframe class="hero-card-map-embed" src="${mapUrlForLocation(nextEventLocation)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${nextEventLocation}"></iframe><a class="hero-card-map-overlay" href="${directionsUrlForLocation(nextEventLocation)}" target="_blank" rel="noreferrer" aria-label="Open directions to ${nextEventLocation}"><span>Directions</span></a></div><a class="hero-card-map-link" href="${directionsUrlForLocation(nextEventLocation)}" target="_blank" rel="noreferrer">Open directions to ${nextEventLocation}</a></div>` : ""}</div></section><section class="section upcoming-events-section" id="upcoming-events"><div class="section-heading centered-events-heading"><div><p class="eyebrow">Upcoming Events</p><h2>Troop calendar highlights</h2></div><p class="section-copy">${rangeLabel}</p></div><div class="upcoming-scroller-shell"><button class="event-scroll-button previous" type="button" data-event-scroll="-1" aria-label="Browse earlier events">&#8249;</button><div class="upcoming-event-scroller" data-upcoming-scroller>${landingEvents.map((event, index) => renderLandingScrollerCard(event, index, currentEventIndex)).join("") || `<article class="panel empty-events-panel"><div class="panel-heading"><h3>No events in this window</h3><p>Check back soon for updated troop calendar details.</p></div></article>`}</div><button class="event-scroll-button next" type="button" data-event-scroll="1" aria-label="Browse later events">&#8250;</button></div>${landingEvents.length ? `<div class="event-scroll-dots" aria-label="Event position">${landingEvents.map((_, index) => `<span class="event-scroll-dot${index === currentEventIndex ? " is-active" : ""}"></span>`).join("")}</div>` : ""}</section>`;
+  requestUpcomingScrollerCenter();
 }
 function renderDashboard(mode) { const config = dashboards[mode]; const scribePanel = canSeeOrgChart() ? `<article class="panel"><div class="panel-heading"><h3>Adult leader tools</h3><p>Prototype route family requested in the requirements.</p></div><ul class="detail-list"><li><a class="text-link" href="#/scribe/attendance">Scribe attendance</a></li><li><a class="text-link" href="#/holidays">Holiday blackouts</a></li><li><a class="text-link" href="#/adults">Adult records</a></li><li><a class="text-link" href="#/org-chart">Troop org chart</a></li><li><a class="text-link" href="#/org-chart/edit-scouts">Edit scout org chart</a></li><li><a class="text-link" href="#/org-chart/edit-adults">Edit adult org chart</a></li></ul></article>` : ""; const adultScoutRosterSection = canSeeOrgChart() ? renderAdultScoutRosterPanel() : ""; const parentEventGroups = mode === "parent" ? getParentDashboardEventGroups() : null; const eventPreviewSection = mode === "parent" ? `<section class="section"><div class="section-heading"><div><p class="eyebrow">Events</p><h2>Event detail preview</h2></div><p class="section-copy">${parentEventGroups?.linkedScouts?.length ? "Recent and upcoming events for the scouts linked to this parent view." : "Link a scout to this parent to show family-relevant events here."}</p></div><div class="feature-grid"><div class="feature-column"><article class="panel"><div class="panel-heading"><h3>Last three weeks</h3><p>Up to two recent events tied to your registered scouts.</p></div>${parentEventGroups?.recent?.length ? `<div class="event-grid parent-event-grid">${parentEventGroups.recent.map(({ event, registeredScouts }) => renderParentEventCard(event, registeredScouts)).join("")}</div>` : `<p class="event-description">No linked-scout events were found in the last three weeks.</p>`}</article></div><div class="feature-column"><article class="panel"><div class="panel-heading"><h3>Next eight weeks</h3><p>Upcoming events for your linked scouts, with each registered child shown on the card.</p></div>${parentEventGroups?.upcoming?.length ? `<div class="event-grid parent-event-grid">${parentEventGroups.upcoming.map(({ event, registeredScouts }) => renderParentEventCard(event, registeredScouts)).join("")}</div>` : `<p class="event-description">No linked-scout events were found in the next eight weeks.</p>`}</article></div></div></section>` : `<section class="section"><div class="section-heading"><div><p class="eyebrow">Events</p><h2>Event detail preview</h2></div><p class="section-copy">Each event includes a direct route to richer details.</p></div><div class="event-grid">${getEventDetailPreviewEvents().map(renderEventCard).join("")}</div></section>`; app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">${config.eyebrow}</p><h2>${config.title}</h2><p class="intro compact">${config.intro}</p></div><div class="status-chip"><span>Post-login destination</span><strong>Role-based dashboard</strong></div></section><section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Today</h3><p>Personalized access driven by role.</p></div><ul class="detail-list">${config.tasks.map((task) => `<li>${task}</li>`).join("")}</ul></article><article class="panel"><div class="panel-heading"><h3>Attendance decisions</h3><p>Current rules resolved from the updated requirements.</p></div><ul class="detail-list"><li>Statuses: Present, Absent</li><li>Non-regular-meeting attendance can be marked by any adult leader</li><li>Regular meeting attendance continues to support the Scribe workflow</li></ul></article><article class="panel"><div class="panel-heading"><h3>Reports</h3><p>Visibility follows access to the underlying troop data.</p></div><ul class="detail-list">${config.reports.map((report) => `<li>${report}</li>`).join("")}</ul></article><article class="panel"><div class="panel-heading"><h3>Calendar sync behavior</h3><p>Direct Google Calendar changes should flow into the site.</p></div><div class="sync-card"><div><span class="sync-label">Edited outside the site</span><strong>Reflect updated details</strong></div><div><span class="sync-label">Deleted outside the site</span><strong>Remove from the site view</strong></div></div></article>${canSeeOrgChart() ? renderLeadershipSummary() : ""}${scribePanel}</section>${eventPreviewSection}${adultScoutRosterSection}`; }
 function renderEventsList() { if (!canSeeOrgChart()) { renderAccessDenied(); return; } const sortedEvents = [...getSortedEvents()].reverse(); app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Events</p><h2>Editable event list</h2><p class="intro compact">Adult leaders can review the full imported schedule in one list and jump directly into any event editor.</p></div><div class="status-chip"><span>Route</span><strong>/events</strong></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Manage events</p><h2>All scheduled events</h2></div><div class="scribe-actions"><a class="button secondary" href="#/events/calendar">Open calendar view</a></div></div><div class="panel"><div class="panel-heading"><h3>${sortedEvents.length} events loaded</h3><p>Newest start date first. Use Edit to open the existing event detail editor for any row.</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Title</th><th>Dates</th><th>Category</th><th>Location</th><th>Audience</th><th>Edit</th></tr></thead><tbody>${sortedEvents.map((event) => `<tr><td>${event.title}</td><td>${event.dateLabel || "-"}</td><td>${event.category || "-"}</td><td>${event.location || "-"}</td><td>${event.audience || "-"}</td><td><a class="text-link" href="#/events/${event.id}">Edit</a></td></tr>`).join("")}</tbody></table></div></div></section>`; }
 function renderEventsIndex() {
   const selectedMonth = ensureSelectedMonth();
+  if (!selectedMonth) {
+    app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Events</p><h2>Troop 883 monthly calendar</h2><p class="intro compact">Event data is loading or temporarily unavailable.</p></div><div class="status-chip"><span>Route</span><strong>/events/calendar</strong></div></section><section class="section"><article class="panel"><div class="panel-heading"><h3>No events loaded</h3><p>Refresh the page or try the calendar again shortly.</p></div></article></section>`;
+    return;
+  }
   const selectedDate = getSelectedCalendarDate();
   const selectedDateObj = parseDateKey(selectedDate) || prototypeToday;
   const [selectedYear, selectedMonthNumber] = selectedMonth.split("-").map(Number);
@@ -1268,6 +1501,7 @@ function renderEventsIndex() {
 function renderEventRoute(eventId) {
   const event = getEventById(eventId);
   if (!event) { renderNotFound(); return; }
+  eventEditorSaveStatus = "saved";
   const visitorView = !canSeeOrgChart();
   const gallery = getDisplayMediaItems(event);
   const audienceOptions = eventAudienceOptions.includes(event.audience) ? eventAudienceOptions : [...eventAudienceOptions, event.audience].filter(Boolean);
@@ -1284,7 +1518,8 @@ function renderEventRoute(eventId) {
     const activityEnd = formatDateTimeLocalValue(activity.endDate || activity.startDate);
     return `<article class="month-summary-card"><div class="panel-heading"><h3>${visitorView ? (activity.description || `Activity ${index + 1}`) : `Activity ${index + 1}`}</h3>${!visitorView ? `<button class="icon-button" type="button" data-remove-activity="${activity.id}" aria-label="Remove activity ${index + 1}">&times;</button>` : ""}</div>${visitorView ? `<p class="event-description">${activity.description || "No activity description yet."}</p><ul class="detail-list"><li>Location: ${activity.location || "Location TBD"}</li><li>Starts: ${formatExactEventDateTime(activity.startDate)}</li><li>Ends: ${formatExactEventDateTime(activity.endDate || activity.startDate)}</li></ul>` : `<div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Description</td><td><input type="text" data-activity-description="${activity.id}" value="${activity.description}" aria-label="Activity description" /></td></tr><tr><td>Location</td><td><input type="text" data-activity-location="${activity.id}" value="${activity.location}" aria-label="Activity location" /></td></tr><tr><td>Start</td><td><input type="datetime-local" data-activity-start="${activity.id}" value="${activityStart}" aria-label="Activity start date and time" /></td></tr><tr><td>End</td><td><input type="datetime-local" data-activity-end="${activity.id}" value="${activityEnd}" aria-label="Activity end date and time" /></td></tr></tbody></table></div>`}</article>`;
   }).join("") : `<article class="month-summary-card"><p class="event-description">${visitorView ? "No activities are listed for this event yet." : "No activities yet. Use Add activity to create the first one."}</p></article>`;
-  app.innerHTML = `${topNav()}<section class="event-route-hero"><div class="event-route-copy"><p class="eyebrow">${visitorView ? "Event details" : "Edit event"}</p><h2>${event.title}</h2><p class="intro compact">${visitorView ? "Public and non-adult-leader viewers see the full event story, home base, activities, and gallery here." : "Adult leaders can edit the event details, home base, activities, add images or videos, copy the event into a new future draft, or remove it when it should no longer appear on the calendar."}</p><div class="event-meta"><span>${event.category}</span><span>${event.dateLabel}</span><span>${event.homeBase || "Home base TBD"}</span>${event.repeatEnabled ? `<span>${repeatSummary}</span>` : ""}</div></div><div class="status-chip"><span>Route</span><strong>/events/${event.id}</strong></div></section>${visitorView ? `<section class="section event-route-grid"><article class="panel event-story"><div class="panel-heading"><h3>${event.title}</h3><p>${event.description}</p></div><div class="event-meta"><span>${event.audience}</span><span>${event.dateLabel}</span>${event.repeatEnabled ? `<span>${repeatSummary}</span>` : ""}</div><ul class="detail-list"><li>Location from where all activities will start: ${event.homeBase || "Home base TBD"}</li><li>Event starts: ${formatExactEventDateTime(event.startDate)}</li><li>Event ends: ${formatExactEventDateTime(event.endDate || event.startDate)}</li>${event.repeatEnabled ? `<li>${repeatSummary}</li>` : ""}</ul><div class="detail-note">${event.detailNote}</div></article><article class="panel map-panel"><div class="panel-heading"><h3>Home base</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></article></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Event activity list</h2></div><p class="section-copy">Each activity can have its own location and start/end time.</p></div><div class="detail-stack">${activitiesMarkup}</div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Gallery</p><h2>Event media</h2></div><p class="section-copy">Each image or video can carry its own caption, comments, and reactions.</p></div><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, false)).join("")}</div></section>` : `<section class="section event-route-grid"><article class="panel"><div class="panel-heading"><h3>Event content</h3><p>Changes save automatically after 0.5 seconds of inactivity.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Title</td><td><input type="text" data-event-edit-title value="${event.title}" aria-label="Event title" /></td></tr><tr><td>Category</td><td><input type="text" data-event-edit-category value="${event.category}" aria-label="Event category" /></td></tr><tr><td>Start</td><td><input type="datetime-local" data-event-edit-start value="${startValue}" aria-label="Event start date and time" /></td></tr><tr><td>End</td><td><input type="datetime-local" data-event-edit-end value="${endValue}" aria-label="Event end date and time" /></td></tr><tr><td>Home base</td><td><input type="text" data-event-edit-home-base value="${event.homeBase || ""}" aria-label="Location from where all activities will start" title="Location from where all activities will start" /></td></tr><tr><td>Audience</td><td><select data-event-edit-audience aria-label="Event audience">${audienceOptions.map((audience) => `<option value="${audience}"${audience === event.audience ? " selected" : ""}>${audience}</option>`).join("")}</select></td></tr><tr><td>Description</td><td><textarea data-event-edit-description aria-label="Event description">${event.description}</textarea></td></tr><tr><td>Detail note</td><td><textarea data-event-edit-note aria-label="Event detail note">${event.detailNote}</textarea></td></tr><tr><td>Upcoming</td><td><select data-event-edit-upcoming aria-label="Event upcoming status"><option value="true"${event.upcoming ? " selected" : ""}>Upcoming</option><option value="false"${!event.upcoming ? " selected" : ""}>Recent / past</option></select></td></tr><tr><td>Repeatable</td><td><select data-event-edit-repeat-enabled aria-label="Whether this event repeats"><option value="false"${!event.repeatEnabled ? " selected" : ""}>No</option><option value="true"${event.repeatEnabled ? " selected" : ""}>Yes</option></select></td></tr><tr><td>Repeat frequency</td><td><select data-event-edit-repeat-frequency aria-label="Event repeat frequency"><option value="daily"${event.repeatFrequency === "daily" ? " selected" : ""}>Daily</option><option value="weekly"${event.repeatFrequency === "weekly" ? " selected" : ""}>Weekly</option><option value="monthly"${event.repeatFrequency === "monthly" ? " selected" : ""}>Monthly</option></select></td></tr><tr><td>Repeat interval</td><td><input type="number" min="1" step="1" data-event-edit-repeat-interval value="${event.repeatInterval || 1}" aria-label="Repeat every number of intervals" /></td></tr><tr><td>Monthly repeat rule</td><td><select data-event-edit-repeat-monthly-pattern aria-label="Monthly repeat pattern"><option value="date"${monthlyPattern === "date" ? " selected" : ""}>Same date each month</option><option value="nth-weekday"${monthlyPattern === "nth-weekday" ? " selected" : ""}>Nth weekday of the month</option></select></td></tr><tr><td>Monthly ordinal</td><td><select data-event-edit-repeat-monthly-ordinal aria-label="Monthly repeat ordinal"><option value="first"${monthlyOrdinal === "first" ? " selected" : ""}>First</option><option value="second"${monthlyOrdinal === "second" ? " selected" : ""}>Second</option><option value="third"${monthlyOrdinal === "third" ? " selected" : ""}>Third</option><option value="fourth"${monthlyOrdinal === "fourth" ? " selected" : ""}>Fourth</option><option value="last"${monthlyOrdinal === "last" ? " selected" : ""}>Last</option></select></td></tr><tr><td>Monthly weekday</td><td><select data-event-edit-repeat-monthly-weekday aria-label="Monthly repeat weekday"><option value="sunday"${monthlyWeekday === "sunday" ? " selected" : ""}>Sunday</option><option value="monday"${monthlyWeekday === "monday" ? " selected" : ""}>Monday</option><option value="tuesday"${monthlyWeekday === "tuesday" ? " selected" : ""}>Tuesday</option><option value="wednesday"${monthlyWeekday === "wednesday" ? " selected" : ""}>Wednesday</option><option value="thursday"${monthlyWeekday === "thursday" ? " selected" : ""}>Thursday</option><option value="friday"${monthlyWeekday === "friday" ? " selected" : ""}>Friday</option><option value="saturday"${monthlyWeekday === "saturday" ? " selected" : ""}>Saturday</option></select></td></tr><tr><td>Repeat until</td><td><input type="datetime-local" data-event-edit-repeat-until value="${repeatUntilValue}" aria-label="Repeat until date and time" /></td></tr></tbody></table></div><div class="event-editor-actions"><button class="button secondary" type="button" data-add-activity="${event.id}">Add activity</button><button class="button secondary" type="button" data-copy-event="${event.id}">Copy as new event</button><button class="button danger" type="button" data-delete-event="${event.id}">Remove event</button></div></article><article class="panel"><div class="panel-heading"><h3>Visitor gallery</h3><p>Upload image or video files, then use the button on a specific gallery item if you want only that item to become the primary event image. The current primary item always appears first.</p></div><label class="button secondary upload-button"><input class="visually-hidden-file-input" type="file" data-event-image-upload accept="image/*,video/*" multiple />Upload media</label><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, true)).join("")}</div></article></section><section class="section"><div class="panel map-panel"><div class="panel-heading"><h3>Home base map preview</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Edit event activities</h2></div><p class="section-copy">Each activity can have its own description, location, and start/end date and time.</p></div><div class="detail-stack">${activitiesMarkup}</div></section>`}`;
+  const repeatRows = event.repeatEnabled ? `<tr><td>Repeat frequency</td><td><select data-event-edit-repeat-frequency aria-label="Event repeat frequency"><option value="daily"${event.repeatFrequency === "daily" ? " selected" : ""}>Daily</option><option value="weekly"${event.repeatFrequency === "weekly" ? " selected" : ""}>Weekly</option><option value="monthly"${event.repeatFrequency === "monthly" ? " selected" : ""}>Monthly</option></select></td></tr><tr><td>Repeat interval</td><td><input type="number" min="1" step="1" data-event-edit-repeat-interval value="${event.repeatInterval || 1}" aria-label="Repeat every number of intervals" /></td></tr><tr><td>Monthly repeat rule</td><td><select data-event-edit-repeat-monthly-pattern aria-label="Monthly repeat pattern"><option value="date"${monthlyPattern === "date" ? " selected" : ""}>Same date each month</option><option value="nth-weekday"${monthlyPattern === "nth-weekday" ? " selected" : ""}>Nth weekday of the month</option></select></td></tr><tr><td>Monthly ordinal</td><td><select data-event-edit-repeat-monthly-ordinal aria-label="Monthly repeat ordinal"><option value="first"${monthlyOrdinal === "first" ? " selected" : ""}>First</option><option value="second"${monthlyOrdinal === "second" ? " selected" : ""}>Second</option><option value="third"${monthlyOrdinal === "third" ? " selected" : ""}>Third</option><option value="fourth"${monthlyOrdinal === "fourth" ? " selected" : ""}>Fourth</option><option value="last"${monthlyOrdinal === "last" ? " selected" : ""}>Last</option></select></td></tr><tr><td>Monthly weekday</td><td><select data-event-edit-repeat-monthly-weekday aria-label="Monthly repeat weekday"><option value="sunday"${monthlyWeekday === "sunday" ? " selected" : ""}>Sunday</option><option value="monday"${monthlyWeekday === "monday" ? " selected" : ""}>Monday</option><option value="tuesday"${monthlyWeekday === "tuesday" ? " selected" : ""}>Tuesday</option><option value="wednesday"${monthlyWeekday === "wednesday" ? " selected" : ""}>Wednesday</option><option value="thursday"${monthlyWeekday === "thursday" ? " selected" : ""}>Thursday</option><option value="friday"${monthlyWeekday === "friday" ? " selected" : ""}>Friday</option><option value="saturday"${monthlyWeekday === "saturday" ? " selected" : ""}>Saturday</option></select></td></tr><tr><td>Repeat until</td><td><input type="datetime-local" data-event-edit-repeat-until value="${repeatUntilValue}" aria-label="Repeat until date and time" /></td></tr>` : "";
+  app.innerHTML = `${topNav()}<section class="event-route-hero"><div class="event-route-copy"><p class="eyebrow">${visitorView ? "Event details" : "Edit event"}</p><h2>${event.title}</h2><p class="intro compact">${visitorView ? "Public and non-adult-leader viewers see the full event story, home base, activities, and gallery here." : "Adult leaders can edit the event details, home base, activities, add images or videos, copy the event into a new future draft, or remove it when it should no longer appear on the calendar."}</p><div class="event-meta"><span>${event.category}</span><span>${event.dateLabel}</span><span>${event.homeBase || "Home base TBD"}</span>${event.repeatEnabled ? `<span>${repeatSummary}</span>` : ""}</div></div><div class="status-chip"><span>Route</span><strong>/events/${event.id}</strong></div></section>${visitorView ? `<section class="section event-route-grid"><article class="panel event-story"><div class="panel-heading"><h3>${event.title}</h3><p>${event.description}</p></div><div class="event-meta"><span>${event.audience}</span><span>${event.dateLabel}</span>${event.repeatEnabled ? `<span>${repeatSummary}</span>` : ""}</div><ul class="detail-list"><li>Location from where all activities will start: ${event.homeBase || "Home base TBD"}</li><li>Event starts: ${formatExactEventDateTime(event.startDate)}</li><li>Event ends: ${formatExactEventDateTime(event.endDate || event.startDate)}</li>${event.repeatEnabled ? `<li>${repeatSummary}</li>` : ""}</ul><div class="detail-note">${event.detailNote}</div></article><article class="panel map-panel"><div class="panel-heading"><h3>Home base</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></article></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Event activity list</h2></div><p class="section-copy">Each activity can have its own location and start/end time.</p></div><div class="detail-stack">${activitiesMarkup}</div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Gallery</p><h2>Event media</h2></div><p class="section-copy">Each image or video can carry its own caption, comments, and reactions.</p></div><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, false)).join("")}</div></section>` : `<section class="section event-route-grid"><article class="panel"><div class="panel-heading"><h3 class="event-content-heading"><span>Event content</span><span class="event-save-status" data-event-save-status="${eventEditorSaveStatus}">${eventEditorStatusLabel()}</span></h3><p>Changes save automatically after 0.5 seconds of inactivity.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Title</td><td><input type="text" data-event-edit-title value="${event.title}" aria-label="Event title" /></td></tr><tr><td>Category</td><td><input type="text" data-event-edit-category value="${event.category}" aria-label="Event category" /></td></tr><tr><td>Start</td><td><input type="datetime-local" data-event-edit-start value="${startValue}" aria-label="Event start date and time" /></td></tr><tr><td>End</td><td><input type="datetime-local" data-event-edit-end value="${endValue}" aria-label="Event end date and time" /></td></tr><tr><td>Home base</td><td><input type="text" data-event-edit-home-base value="${event.homeBase || ""}" aria-label="Location from where all activities will start" title="Location from where all activities will start" /></td></tr><tr><td>Audience</td><td><select data-event-edit-audience aria-label="Event audience">${audienceOptions.map((audience) => `<option value="${audience}"${audience === event.audience ? " selected" : ""}>${audience}</option>`).join("")}</select></td></tr><tr><td>Description</td><td><textarea data-event-edit-description aria-label="Event description">${event.description}</textarea></td></tr><tr><td>Detail note</td><td><textarea data-event-edit-note aria-label="Event detail note">${event.detailNote}</textarea></td></tr><tr><td>Upcoming</td><td><select data-event-edit-upcoming aria-label="Event upcoming status"><option value="true"${event.upcoming ? " selected" : ""}>Upcoming</option><option value="false"${!event.upcoming ? " selected" : ""}>Recent / past</option></select></td></tr><tr><td>Repeatable</td><td><select data-event-edit-repeat-enabled aria-label="Whether this event repeats"><option value="false"${!event.repeatEnabled ? " selected" : ""}>No</option><option value="true"${event.repeatEnabled ? " selected" : ""}>Yes</option></select></td></tr>${repeatRows}</tbody></table></div><div class="event-editor-actions"><button class="button secondary" type="button" data-add-activity="${event.id}">Add activity</button><button class="button secondary" type="button" data-copy-event="${event.id}">Copy as new event</button><button class="button danger" type="button" data-delete-event="${event.id}">Remove event</button></div></article><article class="panel"><div class="panel-heading"><h3>Visitor gallery</h3><p>Upload one or more image or video files at once. Items are stored oldest to newest by upload time; the selected primary item still displays first.</p></div><label class="button secondary upload-button"><input class="visually-hidden-file-input" type="file" data-event-image-upload accept="image/*,video/*" multiple />Upload media</label><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, true)).join("")}</div></article></section><section class="section"><div class="panel map-panel"><div class="panel-heading"><h3>Home base map preview</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Edit event activities</h2></div><p class="section-copy">Each activity can have its own description, location, and start/end date and time.</p></div><div class="detail-stack">${activitiesMarkup}</div></section>`}`;
 }
 function renderScribeIndex() { if (canSeeOrgChart()) { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scribe attendance</p><h2>Adult leader attendance spreadsheet</h2><p class="intro compact">This view shows all scouts in the first column and meeting dates across the top, with the most recent meeting on the far right.</p></div><div class="status-chip"><span>Route</span><strong>/scribe/attendance</strong></div></section>${renderAdultLeaderAttendanceMatrix()}<section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Attendance routes</h3><p>Additional attendance workflows remain available from here.</p></div><ul class="detail-list"><li><a class="text-link" href="#/scribe/attendance/history">Attendance history</a></li><li><a class="text-link" href="#/scribe/attendance/reports/monthly">Monthly report</a></li><li><a class="text-link" href="#/scribe/attendance/print">Printable attendance sheet</a></li><li><a class="text-link" href="#/scribe/attendance/upload">Upload completed sheet</a></li></ul></article><article class="panel"><div class="panel-heading"><h3>Roster summary</h3><p>${roster.length} scouts with parents/guardians loaded for review.</p></div><ul class="detail-list"><li>Total scouts: ${roster.length}</li><li>Patrols: ${patrolNames.join(", ")}</li><li>Leadership positions assigned: ${roster.filter((scout) => scout.leadershipRole).length}</li></ul></article></section>`; return; } app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scribe attendance</p><h2>Regular meeting attendance workspace</h2><p class="intro compact">This route family models the dedicated Scribe workflow for meeting attendance, print sheets, uploads, history, and monthly reporting.</p></div><div class="status-chip"><span>Route</span><strong>/scribe/attendance</strong></div></section><section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Route family</h3><p>Available pages in the prototype.</p></div><ul class="detail-list"><li><a class="text-link" href="#/scribe/attendance/event/troop-meeting-stem">Meeting attendance sheet</a></li><li><a class="text-link" href="#/scribe/attendance/print">Printable attendance sheet</a></li><li><a class="text-link" href="#/scribe/attendance/upload">Upload completed sheet</a></li><li><a class="text-link" href="#/scribe/attendance/history">Attendance history</a></li><li><a class="text-link" href="#/scribe/attendance/reports/monthly">Monthly report</a></li></ul></article><article class="panel"><div class="panel-heading"><h3>Roster summary</h3><p>${roster.length} scouts with parents/guardians loaded for review.</p></div><ul class="detail-list"><li>Total scouts: ${roster.length}</li><li>Patrols: ${patrolNames.join(", ")}</li><li>Leadership positions assigned: ${roster.filter((scout) => scout.leadershipRole).length}</li></ul></article><article class="panel"><div class="panel-heading"><h3>Current meeting</h3><p>Sample attendance event.</p></div><ul class="detail-list"><li>Event: Regular Meeting: STEM Challenge Night</li><li>Date: Apr 8, 2026</li><li>Statuses: Present / Absent</li></ul></article></section>`; }
 function renderScribeEvent() { app.innerHTML = `${topNav()}<section class="section-heading"><div><p class="eyebrow">Scribe attendance</p><h2>Regular Meeting: STEM Challenge Night</h2></div><p class="section-copy">Scouts grouped by patrol with Unassigned support available when needed.</p></section><div class="scribe-actions"><a class="button secondary" href="#/scribe/attendance/print">Print sheet</a><a class="button secondary" href="#/scribe/attendance/upload">Upload completed sheet</a><a class="button secondary" href="#/scribe/attendance/history">View history</a></div>${groupedByPatrol.map((group) => `<section class="section"><div class="panel"><div class="panel-heading"><h3>${getPatrolDisplayName(group.name)}${group.name ? " Patrol" : ""}</h3><p>${group.scouts.length} scouts</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Scout</th><th>Gender</th><th>Rank</th><th>Leadership</th><th>Attendance</th><th>Contacts</th></tr></thead><tbody>${group.scouts.map((scout) => `<tr><td>${renderScoutName(scout, { className: "text-link" })}</td><td>${scout.gender}</td><td>${scout.rank}</td><td>${scout.leadershipRole || "-"}</td><td><span class="attendance-badge ${scout.attendance === "Present" ? "present" : "absent"}">${scout.attendance}</span></td><td>${scout.parents.map((parent) => `${parent.relationship}: ${parent.name}`).join("<br />")}</td></tr>`).join("")}</tbody></table></div></div></section>`).join("")}`; }
@@ -1325,19 +1560,23 @@ function renderScoutRecordEditor(scoutId) {
   const scout = roster.find((entry) => entry.id === scoutId);
   if (!scout) { renderNotFound(); return; }
   if (!canEditScoutRecord(scoutId)) {
-    app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Restricted route</p><h2>Scout access required</h2><p class="intro compact">This scout record can be edited by the matching signed-in scout, a linked parent, an adult leader, or an administrator.</p></div><div class="status-chip"><span>Route</span><strong>/scouts/${scout.id}</strong></div></section>`;
+    renderFriendlyAccessMessage("Looks like you are flailing a bit. This scout record can only be opened by the matching signed-in scout, a linked parent, an adult leader, or an administrator.");
     return;
   }
+  scoutRecordSaveStatus = "saved";
   const editorLabel = canSeeOrgChart()
     ? "Adult leaders and administrators can edit this scout record."
     : modeSelect.value === "parent"
       ? "Linked parents can update this scout record."
       : "The logged-in scout can edit their own record.";
-  app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scout record</p><h2>${scout.name}</h2><p class="intro compact">${editorLabel} Text fields and selections save on blur.</p></div><div class="status-chip"><span>Route</span><strong>/scouts/${scout.id}</strong></div></section><section class="section"><div class="panel"><div class="panel-heading"><h3>Scout details</h3><p>Parents and guardians shown here are sourced from the separate adult-scout relationship file.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Avatar</td><td><label class="scout-avatar-editor" aria-label="Change avatar for ${scout.name}"><img class="scout-avatar large" data-scout-avatar-preview src="${getScoutAvatar(scout)}" alt="${scout.name} avatar preview" /><span>Change avatar</span><input class="visually-hidden-file-input" type="file" data-scout-avatar-upload accept="image/*" /></label></td></tr><tr><td>Name</td><td><div class="scout-name-editor"><label><span>First name</span><input type="text" data-scout-edit-first-name value="${getScoutFirstName(scout)}" aria-label="Scout first name" /></label><label><span>Last name</span><input type="text" data-scout-edit-last-name value="${getScoutLastName(scout)}" aria-label="Scout last name" /></label></div></td></tr><tr><td>Nickname</td><td><input type="text" data-scout-edit-nickname value="${getScoutNickname(scout)}" aria-label="Scout nickname" /></td></tr><tr><td>Gender</td><td><select data-scout-edit-gender aria-label="Scout gender"><option value="male"${scout.gender === "male" ? " selected" : ""}>male</option><option value="female"${scout.gender === "female" ? " selected" : ""}>female</option><option value="not specified"${scout.gender === "not specified" ? " selected" : ""}>not specified</option></select></td></tr><tr><td>Rank</td><td><select data-scout-edit-rank aria-label="Scout rank">${scoutRankOptions.map((rank) => `<option value="${rank}"${rank === scout.rank ? " selected" : ""}>${rank}</option>`).join("")}</select></td></tr><tr><td>Parents / guardians</td><td>${scout.parents.length ? scout.parents.map((parent) => `<a class="text-link" href="#/adults/${parent.adultId}" target="_blank" rel="noreferrer">${parent.relationship}: ${parent.name}</a>`).join("<br />") : "No linked adults"}</td></tr><tr><td>Patrol</td><td><div class="scout-patrol-editor"><select data-scout-edit-patrol aria-label="Scout patrol">${getPatrolNameList([], { includeUnassigned: true }).map((patrol) => `<option value="${patrol}"${patrol === scout.patrol ? " selected" : ""}>${getPatrolDisplayName(patrol)}</option>`).join("")}</select><img class="leader-emblem scout-patrol-badge-preview" data-scout-patrol-badge-preview src="${getPatrolBadgeImage(scout.patrol)}" alt="${getPatrolDisplayName(scout.patrol)} badge" /></div></td></tr><tr><td>Leadership position</td><td><select data-scout-edit-role aria-label="Scout leadership position">${scoutLeadershipOptions.map((role) => `<option value="${role}"${role === scout.leadershipRole ? " selected" : ""}>${role || "Not assigned"}</option>`).join("")}</select></td></tr></tbody></table></div></div></section>`;
+  app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scout record</p><h2>${scout.name}</h2><p class="intro compact">${editorLabel} Text fields and selections save on blur.</p></div><div class="status-chip"><span>Route</span><strong>/scouts/${scout.id}</strong></div></section><section class="section"><div class="panel"><div class="panel-heading"><h3 class="record-content-heading"><span>Scout details</span><span class="record-save-status" data-scout-save-status="${scoutRecordSaveStatus}">${scoutRecordStatusLabel()}</span></h3><p>Parents and guardians shown here are sourced from the separate adult-scout relationship file.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Avatar</td><td><label class="scout-avatar-editor" aria-label="Change avatar for ${scout.name}"><img class="scout-avatar large" data-scout-avatar-preview src="${getScoutAvatar(scout)}" alt="${scout.name} avatar preview" /><span>Change avatar</span><input class="visually-hidden-file-input" type="file" data-scout-avatar-upload accept="image/*" /></label></td></tr><tr><td>Name</td><td><div class="scout-name-editor"><label><span>First name</span><input type="text" data-scout-edit-first-name value="${getScoutFirstName(scout)}" aria-label="Scout first name" /></label><label><span>Last name</span><input type="text" data-scout-edit-last-name value="${getScoutLastName(scout)}" aria-label="Scout last name" /></label></div></td></tr><tr><td>Nickname</td><td><input type="text" data-scout-edit-nickname value="${getScoutNickname(scout)}" aria-label="Scout nickname" /></td></tr><tr><td>Gender</td><td><select data-scout-edit-gender aria-label="Scout gender"><option value="male"${scout.gender === "male" ? " selected" : ""}>male</option><option value="female"${scout.gender === "female" ? " selected" : ""}>female</option><option value="not specified"${scout.gender === "not specified" ? " selected" : ""}>not specified</option></select></td></tr><tr><td>Rank</td><td><select data-scout-edit-rank aria-label="Scout rank">${scoutRankOptions.map((rank) => `<option value="${rank}"${rank === scout.rank ? " selected" : ""}>${rank}</option>`).join("")}</select></td></tr><tr><td>Parents / guardians</td><td>${scout.parents.length ? scout.parents.map((parent) => `<a class="text-link" href="#/adults/${parent.adultId}" target="_blank" rel="noreferrer">${parent.relationship}: ${parent.name}</a>`).join("<br />") : "No linked adults"}</td></tr><tr><td>Patrol</td><td><div class="scout-patrol-editor"><select data-scout-edit-patrol aria-label="Scout patrol">${getPatrolNameList([], { includeUnassigned: true }).map((patrol) => `<option value="${patrol}"${patrol === scout.patrol ? " selected" : ""}>${getPatrolDisplayName(patrol)}</option>`).join("")}</select><img class="leader-emblem scout-patrol-badge-preview" data-scout-patrol-badge-preview src="${getPatrolBadgeImage(scout.patrol)}" alt="${getPatrolDisplayName(scout.patrol)} badge" /></div></td></tr><tr><td>Leadership position</td><td><select data-scout-edit-role aria-label="Scout leadership position">${scoutLeadershipOptions.map((role) => `<option value="${role}"${role === scout.leadershipRole ? " selected" : ""}>${role || "Not assigned"}</option>`).join("")}</select></td></tr></tbody></table></div></div></section>`;
 }
-function renderAccessDenied() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Restricted route</p><h2>Access denied</h2><p class="intro compact">This route requires a signed-in account with the right troop role or linked-scout relationship.</p></div><div class="status-chip"><span>Access</span><strong>Restricted</strong></div></section>`; }
+function renderFriendlyAccessMessage(message = "Looks like you are flailing a bit. This page needs a signed-in account with the right troop role or linked-scout relationship.") {
+  app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Restricted route</p><h2>We cannot open that page</h2><p class="intro compact">${message}</p><div class="scribe-actions"><a class="button primary" href="#/">Return Home</a></div></div><div class="status-chip"><span>Access</span><strong>Restricted</strong></div></section>`;
+}
+function renderAccessDenied() { renderFriendlyAccessMessage(); }
 function renderNotFound() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Prototype route</p><h2>Page not found</h2><p class="intro compact">Try the Home, Scribe Attendance, or Org Chart routes from the navigation above.</p></div></section>`; }
-function renderRoute() { renderIdentityControls(); const hash = window.location.hash || "#/"; if (!currentActor?.authenticated && (hash.startsWith("#/scribe/") || hash.startsWith("#/scouts") || hash.startsWith("#/patrols") || hash.startsWith("#/adults") || hash.startsWith("#/org-chart") || hash.startsWith("#/holidays"))) { renderPublic(); applyTitleAttributes(); return; } if (hash === "#/" || hash === "") { if (modeSelect.value === "public") { renderPublic(); applyTitleAttributes(); return; } renderDashboard(modeSelect.value); applyTitleAttributes(); return; } if (hash === "#/resources") { renderResourcesRoute(); applyTitleAttributes(); return; } if (hash === "#/events") { if (canSeeOrgChart()) { renderEventsList(); applyTitleAttributes(); return; } renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/calendar") { renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/list") { renderEventsList(); applyTitleAttributes(); return; } if (hash.startsWith("#/events/")) { renderEventRoute(hash.replace("#/events/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance") { renderScribeIndex(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/event/troop-meeting-stem") { renderScribeEvent(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/print") { renderScribePrint(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/upload") { renderScribeUpload(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/history") { renderScribeHistory(); applyTitleAttributes(); return; } if (hash.startsWith("#/scribe/attendance/history/item/")) { renderScribeHistoryItem(hash.replace("#/scribe/attendance/history/item/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/reports/monthly") { renderScribeMonthly(); applyTitleAttributes(); return; } if (hash === "#/scouts") { renderScoutsRoute(); applyTitleAttributes(); return; } if (hash === "#/patrols") { renderPatrolsRoute(); applyTitleAttributes(); return; } if (hash === "#/holdays") { window.location.hash = "#/holidays"; return; } if (hash === "#/holidays") { renderHolidaysRoute(); applyTitleAttributes(); return; } if (hash.startsWith("#/holidays/")) { renderHolidayEditor(hash.replace("#/holidays/", "")); applyTitleAttributes(); return; } if (hash === "#/adult") { window.location.hash = "#/adults"; return; } if (hash === "#/adults") { renderAdultsRoute(); applyTitleAttributes(); return; } if (hash === "#/org-chart") { renderOrgChart(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-scouts") { renderScoutOrgChartEditor(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-adults") { renderAdultOrgChartEditor(); applyTitleAttributes(); return; } if (hash.startsWith("#/adults/")) { renderAdultRecordEditor(hash.replace("#/adults/", "")); applyTitleAttributes(); return; } if (hash.startsWith("#/scouts/")) { renderScoutRecordEditor(hash.replace("#/scouts/", "")); applyTitleAttributes(); return; } renderNotFound(); applyTitleAttributes(); }
+function renderRoute() { renderIdentityControls(); const hash = window.location.hash || "#/"; if (!currentActor?.authenticated && (hash.startsWith("#/scribe/") || hash.startsWith("#/scouts") || hash.startsWith("#/patrols") || hash.startsWith("#/adults") || hash.startsWith("#/org-chart") || hash.startsWith("#/holidays"))) { renderAccessDenied(); applyTitleAttributes(); return; } if (hash === "#/" || hash === "") { if (modeSelect.value === "public") { renderPublic(); applyTitleAttributes(); return; } renderDashboard(modeSelect.value); applyTitleAttributes(); return; } if (hash === "#/resources") { renderResourcesRoute(); applyTitleAttributes(); return; } if (hash === "#/events") { if (canSeeOrgChart()) { renderEventsList(); applyTitleAttributes(); return; } renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/calendar") { renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/list") { renderEventsList(); applyTitleAttributes(); return; } if (hash.startsWith("#/events/")) { renderEventRoute(hash.replace("#/events/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance") { renderScribeIndex(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/event/troop-meeting-stem") { renderScribeEvent(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/print") { renderScribePrint(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/upload") { renderScribeUpload(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/history") { renderScribeHistory(); applyTitleAttributes(); return; } if (hash.startsWith("#/scribe/attendance/history/item/")) { renderScribeHistoryItem(hash.replace("#/scribe/attendance/history/item/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/reports/monthly") { renderScribeMonthly(); applyTitleAttributes(); return; } if (hash === "#/scouts") { renderScoutsRoute(); applyTitleAttributes(); return; } if (hash === "#/patrols") { renderPatrolsRoute(); applyTitleAttributes(); return; } if (hash === "#/holdays") { window.location.hash = "#/holidays"; return; } if (hash === "#/holidays") { renderHolidaysRoute(); applyTitleAttributes(); return; } if (hash.startsWith("#/holidays/")) { renderHolidayEditor(hash.replace("#/holidays/", "")); applyTitleAttributes(); return; } if (hash === "#/adult") { window.location.hash = "#/adults"; return; } if (hash === "#/adults") { renderAdultsRoute(); applyTitleAttributes(); return; } if (hash === "#/org-chart") { renderOrgChart(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-scouts") { renderScoutOrgChartEditor(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-adults") { renderAdultOrgChartEditor(); applyTitleAttributes(); return; } if (hash.startsWith("#/adults/")) { renderAdultRecordEditor(hash.replace("#/adults/", "")); applyTitleAttributes(); return; } if (hash.startsWith("#/scouts/")) { renderScoutRecordEditor(hash.replace("#/scouts/", "")); applyTitleAttributes(); return; } renderNotFound(); applyTitleAttributes(); }
 function applyScoutFilter(input) {
   const section = input.closest(".section");
   const scope = section?.querySelector("[data-scout-filter-scope]");
@@ -1390,6 +1629,20 @@ document.addEventListener("submit", async (event) => {
   await loadData();
   renderRoute();
 });
+function shouldUseDefaultButtonClickFeedback(button) {
+  if (!button || button.disabled || button.classList.contains("is-clicked")) return false;
+  if (!button.matches(".button")) return false;
+  if (button.closest("[data-login-form]")) return false;
+  if (button.matches("[data-toggle-password], [data-gallery-reaction], .image-reaction-button")) return false;
+  return true;
+}
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("button.button, a.button");
+  if (!shouldUseDefaultButtonClickFeedback(button)) return;
+  button.classList.add("is-clicked");
+  button.setAttribute("aria-disabled", "true");
+  if (button.tagName === "BUTTON") button.disabled = true;
+}, true);
 document.addEventListener("click", async (event) => {
   const passwordToggle = event.target.closest("[data-toggle-password]");
   if (passwordToggle) {
@@ -1410,7 +1663,7 @@ document.addEventListener("click", async (event) => {
   window.location.hash = "#/";
   renderRoute();
 });
-document.addEventListener("change", (event) => {
+document.addEventListener("change", async (event) => {
   const scoutSessionSelect = event.target.closest("#activeScoutSelect");
   if (!scoutSessionSelect) return;
   setActiveScoutId(scoutSessionSelect.value);
@@ -1435,9 +1688,7 @@ document.addEventListener("click", async (event) => {
 
   const calendarNavButton = event.target.closest("[data-calendar-nav]");
   if (calendarNavButton) {
-    setSelectedEventMonth(calendarNavButton.dataset.calendarNav);
-    if (calendarNavButton.dataset.calendarDate) setSelectedCalendarDate(calendarNavButton.dataset.calendarDate);
-    renderRoute();
+    await openCalendarMonth(calendarNavButton.dataset.calendarNav, calendarNavButton.dataset.calendarDate);
     return;
   }
 
@@ -1466,7 +1717,21 @@ document.addEventListener("click", async (event) => {
     return;
   }
 });
-window.addEventListener("hashchange", renderRoute);
+window.addEventListener("hashchange", async () => {
+  if ((window.location.hash || "").startsWith("#/events/calendar")) {
+    try {
+      await loadCalendarMonthEvents(getSelectedEventMonth());
+    } catch (error) {
+      console.warn(error);
+    }
+  }
+  const detailEventId = getEventDetailRouteId();
+  if (detailEventId) {
+    await hydratePublicCalendarEventMedia(detailEventId);
+  }
+  renderRoute();
+  hydrateLandingEventWindowMedia().catch(() => {});
+});
 document.addEventListener("click", async (event) => {
   const showAddPatrolButton = event.target.closest("[data-show-add-patrol]");
   if (showAddPatrolButton) {
@@ -1654,9 +1919,8 @@ document.addEventListener("click", async (event) => {
     const gallery = [...(currentEvent.gallery || [])];
     const imageIndex = gallery.findIndex((image) => image.id === makePrimaryImageButton.dataset.makePrimaryImage);
     if (imageIndex < 0 || !gallery[imageIndex]) return;
-    const [primaryImage] = gallery.splice(imageIndex, 1);
-    currentEvent.gallery = [primaryImage, ...gallery];
-    currentEvent.image = currentEvent.gallery[0]?.src || scoutOrgLogo;
+    currentEvent.image = gallery[imageIndex].src || scoutOrgLogo;
+    currentEvent.gallery = sortGalleryByDateTime(gallery);
     setGalleryImagesInEditor(currentEvent.gallery);
     await saveEvents();
     renderRoute();
@@ -1669,10 +1933,10 @@ document.addEventListener("click", async (event) => {
     const eventId = (window.location.hash || "").replace("#/events/", "");
     const currentEvent = syncEventFromEditor(eventId);
     if (!currentEvent) return;
-    const imageIndex = Number(removeGalleryImageButton.dataset.removeGalleryImage);
-    currentEvent.gallery = (currentEvent.gallery || []).filter((_, index) => index !== imageIndex);
-    currentEvent.image = currentEvent.gallery[0] || scoutOrgLogo;
-    if (!currentEvent.gallery.length) currentEvent.gallery = [currentEvent.image];
+    const imageId = removeGalleryImageButton.dataset.removeGalleryImage;
+    currentEvent.gallery = sortGalleryByDateTime((currentEvent.gallery || []).filter((image) => image.id !== imageId));
+    if (!currentEvent.gallery.length) currentEvent.gallery = [normalizeGalleryItem({ src: scoutOrgLogo }, 0)];
+    if (!currentEvent.gallery.some((image) => image.src === currentEvent.image)) currentEvent.image = currentEvent.gallery[0]?.src || scoutOrgLogo;
     setGalleryImagesInEditor(currentEvent.gallery);
     await saveEvents();
     renderRoute();
@@ -1745,6 +2009,12 @@ document.addEventListener("click", async (event) => {
       expandedAttendanceMonths.add(monthId);
     }
     renderRoute();
+    return;
+  }
+
+  const eventScrollButton = event.target.closest("[data-event-scroll]");
+  if (eventScrollButton) {
+    scrollUpcomingEvents(Number(eventScrollButton.dataset.eventScroll || 1));
     return;
   }
 
@@ -1952,26 +2222,33 @@ document.addEventListener("focusout", async (event) => {
     if (!scoutId || !canEditScoutRecord(scoutId)) return;
     const scout = scouts.find((entry) => entry.id === scoutId);
     if (!scout) return;
-    const nextFirstName = document.querySelector("[data-scout-edit-first-name]")?.value.trim();
-    const nextLastName = document.querySelector("[data-scout-edit-last-name]")?.value.trim();
-    const nextNickname = document.querySelector("[data-scout-edit-nickname]")?.value.trim();
-    const nextGender = document.querySelector("[data-scout-edit-gender]")?.value.trim();
-    const nextRank = document.querySelector("[data-scout-edit-rank]")?.value.trim();
-    const nextPatrol = document.querySelector("[data-scout-edit-patrol]")?.value ?? scout.patrol;
-    const requestedRole = document.querySelector("[data-scout-edit-role]")?.value || "";
-    const nextRole = !String(nextPatrol || "").trim() && isPatrolSpecificRole(requestedRole) ? "" : requestedRole;
-    scout.firstName = nextFirstName || getScoutFirstName(scout);
-    scout.lastName = nextLastName || "";
-    scout.name = [scout.firstName, scout.lastName].filter(Boolean).join(" ");
-    scout.nickname = nextNickname || getDefaultScoutNickname(scout);
-    scout.gender = nextGender || "not specified";
-    scout.rank = nextRank || "Scout";
-    scout.patrol = nextPatrol;
-    scout.patrolBadge = getPatrolBadgeValue(nextPatrol, scout.patrolBadge);
-    scout.leadershipRole = nextRole;
-    await saveScouts();
-    rebuildDerivedData();
-    renderRoute();
+    setScoutRecordSaveStatus("saving");
+    try {
+      const nextFirstName = document.querySelector("[data-scout-edit-first-name]")?.value.trim();
+      const nextLastName = document.querySelector("[data-scout-edit-last-name]")?.value.trim();
+      const nextNickname = document.querySelector("[data-scout-edit-nickname]")?.value.trim();
+      const nextGender = document.querySelector("[data-scout-edit-gender]")?.value.trim();
+      const nextRank = document.querySelector("[data-scout-edit-rank]")?.value.trim();
+      const nextPatrol = document.querySelector("[data-scout-edit-patrol]")?.value ?? scout.patrol;
+      const requestedRole = document.querySelector("[data-scout-edit-role]")?.value || "";
+      const nextRole = !String(nextPatrol || "").trim() && isPatrolSpecificRole(requestedRole) ? "" : requestedRole;
+      scout.firstName = nextFirstName || getScoutFirstName(scout);
+      scout.lastName = nextLastName || "";
+      scout.name = [scout.firstName, scout.lastName].filter(Boolean).join(" ");
+      scout.nickname = nextNickname || getDefaultScoutNickname(scout);
+      scout.gender = nextGender || "not specified";
+      scout.rank = nextRank || "Scout";
+      scout.patrol = nextPatrol;
+      scout.patrolBadge = getPatrolBadgeValue(nextPatrol, scout.patrolBadge);
+      scout.leadershipRole = nextRole;
+      await saveScouts();
+      setScoutRecordSaveStatus("saved");
+      rebuildDerivedData();
+      renderRoute();
+    } catch (error) {
+      setScoutRecordSaveStatus("dirty");
+      throw error;
+    }
     return;
   }
 
@@ -1989,15 +2266,28 @@ document.addEventListener("input", (event) => {
     return;
   }
 
+  const scoutRecordInput = event.target.closest("[data-scout-edit-first-name], [data-scout-edit-last-name], [data-scout-edit-nickname]");
+  if (scoutRecordInput) {
+    setScoutRecordSaveStatus("dirty");
+    return;
+  }
+
   const eventEditorField = event.target.closest(eventEditorFieldSelector);
   if (!eventEditorField) return;
   const eventId = (window.location.hash || "").replace("#/events/", "");
   queueEventAutosave(eventId, 500);
 });
-document.addEventListener("change", (event) => {
+document.addEventListener("change", async (event) => {
   const scoutPatrolSelect = event.target.closest("[data-scout-edit-patrol]");
   if (scoutPatrolSelect) {
     setScoutPatrolBadgePreview(scoutPatrolSelect);
+    setScoutRecordSaveStatus("dirty");
+    return;
+  }
+
+  const scoutRecordSelect = event.target.closest("[data-scout-edit-gender], [data-scout-edit-rank], [data-scout-edit-role]");
+  if (scoutRecordSelect) {
+    setScoutRecordSaveStatus("dirty");
     return;
   }
 
@@ -2020,27 +2310,44 @@ document.addEventListener("change", (event) => {
   const eventEditorField = event.target.closest(eventEditorFieldSelector);
   if (!eventEditorField) return;
   const eventId = (window.location.hash || "").replace("#/events/", "");
+  if (eventEditorField.matches("[data-event-edit-repeat-enabled]")) {
+    setEventEditorSaveStatus("dirty");
+    setEventEditorSaveStatus("saving");
+    try {
+      syncEventFromEditor(eventId);
+      await saveEvents();
+      setEventEditorSaveStatus("saved");
+      renderRoute();
+    } catch (error) {
+      setEventEditorSaveStatus("dirty");
+      throw error;
+    }
+    return;
+  }
   queueEventAutosave(eventId, 500);
 });
-document.addEventListener("change", (event) => {
+document.addEventListener("change", async (event) => {
   const scoutAvatarUploadInput = event.target.closest("[data-scout-avatar-upload]");
   if (scoutAvatarUploadInput) {
     const file = [...(scoutAvatarUploadInput.files || [])].find((entry) => /^image\//.test(String(entry.type || "")));
     const scoutId = (window.location.hash || "").replace("#/scouts/", "");
     const avatarPreview = document.querySelector("[data-scout-avatar-preview]");
     if (!file || !scoutId || !avatarPreview || !canEditScoutRecord(scoutId)) return;
+    setScoutRecordSaveStatus("dirty");
     readFileAsDataUrl(file)
       .then(async (item) => {
         const scout = scouts.find((entry) => entry.id === scoutId);
         if (!scout) return;
+        setScoutRecordSaveStatus("saving");
         scout.avatar = item.src;
         avatarPreview.src = item.src;
         scoutAvatarUploadInput.value = "";
         await saveScouts();
+        setScoutRecordSaveStatus("saved");
         rebuildDerivedData();
         renderRoute();
       })
-      .catch(() => {});
+      .catch(() => setScoutRecordSaveStatus("dirty"));
     return;
   }
 
@@ -2063,12 +2370,24 @@ document.addEventListener("change", (event) => {
     const files = [...(eventImageUploadInput.files || [])].filter((file) => /^(image|video)\//.test(String(file.type || "")));
     const eventId = (window.location.hash || "").replace("#/events/", "");
     if (!files.length || !eventId || !canSeeOrgChart()) return;
-    Promise.all(files.map(readFileAsDataUrl))
+    const uploadBatchTime = Date.now();
+    Promise.all(files.map((file, index) => Promise.all([readFileAsDataUrl(file), readImageDateTime(file)]).then(([item, imageDateTime]) => {
+      const lastModified = file.lastModified ? new Date(file.lastModified).toISOString() : "";
+      return {
+        ...item,
+        id: `image-${uploadBatchTime}-${index + 1}`,
+        imageDateTime: imageDateTime || lastModified,
+        capturedAt: imageDateTime || lastModified,
+        uploadedAt: new Date(uploadBatchTime + index).toISOString(),
+        originalName: file.name || "",
+        lastModified,
+      };
+    })))
       .then(async (mediaItems) => {
         const currentEvent = syncEventFromEditor(eventId);
         if (!currentEvent) return;
-        currentEvent.gallery = [...(currentEvent.gallery || []), ...mediaItems.map((item, index) => normalizeGalleryItem({ ...item, id: `image-${Date.now()}-${index + 1}` }, (currentEvent.gallery || []).length + index))];
-        currentEvent.image = currentEvent.gallery[0]?.src || scoutOrgLogo;
+        currentEvent.gallery = sortGalleryByDateTime([...(currentEvent.gallery || []), ...mediaItems.map((item, index) => normalizeGalleryItem(item, (currentEvent.gallery || []).length + index))]);
+        if (!currentEvent.gallery.some((item) => item.src === currentEvent.image)) currentEvent.image = currentEvent.gallery[0]?.src || scoutOrgLogo;
         setGalleryImagesInEditor(currentEvent.gallery);
         eventImageUploadInput.value = "";
         await saveEvents();
@@ -2086,14 +2405,13 @@ document.addEventListener("change", (event) => {
   const monthKey = `${nextYear}-${nextMonth}`;
   const selectedDate = getSelectedCalendarDate();
   const nextDateKey = selectedDate.startsWith(monthKey) ? selectedDate : `${monthKey}-01`;
-  setSelectedEventMonth(monthKey);
-  setSelectedCalendarDate(nextDateKey);
-  renderRoute();
+  await openCalendarMonth(monthKey, nextDateKey);
 });
 loadData()
   .then(() => {
     rebuildDerivedData();
     renderRoute();
+    hydrateLandingEventWindowMedia().catch(() => {});
   })
   .catch(async (error) => {
     const fallbackEvents = (await loadEventData([])).map(normalizeEvent);
@@ -2103,8 +2421,5 @@ loadData()
       renderRoute();
       return;
     }
-    app.innerHTML = `${topNav()}<section class="dashboard-banner">
-    <div><p class="eyebrow">Data error</p>
-    <h2>Could not load troop data- error</h2>
-    <p class="intro compact">${error.message}</p></div></section>`;
+    renderFriendlyAccessMessage("Looks like you are flailing a bit. We could not open the requested troop data with this account. Return home and try a public page, or sign in with an account that has the right role.");
   });
