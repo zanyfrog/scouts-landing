@@ -9,15 +9,14 @@ COPY scouts-landing/app.js ./app.js
 COPY scouts-landing/server.js ./server.js
 COPY scouts-landing/assets ./assets
 COPY scouts-landing/resources ./resources
-COPY scouts.orm /scouts.orm
 
 ENV PORT=4173
-ENV ORM_BASE_URL=http://scouts-orm:4174
-ENV AUTH_BASE_URL=http://scouts-i-am:3000
+ENV ORM_BASE_URL=http://127.0.0.1:4175
+ENV AUTH_BASE_URL=http://127.0.0.1:3000
 
 EXPOSE 4173
 
-RUN chown -R node:node /app /scouts.orm
+RUN chown -R node:node /app
 
 USER node
 

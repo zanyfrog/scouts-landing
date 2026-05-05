@@ -8,8 +8,8 @@ services:
       - "${PORT:-4177}:4173"
     environment:
       PORT: 4173
-      ORM_BASE_URL: "${ORM_BASE_URL:-http://host.docker.internal:4176}"
-      AUTH_BASE_URL: "${AUTH_BASE_URL:-http://host.docker.internal:3001}"
+      ORM_BASE_URL: "${ORM_BASE_URL:-http://host.docker.internal:4175}"
+      AUTH_BASE_URL: "${AUTH_BASE_URL:-http://host.docker.internal:3000}"
     volumes:
       - scouts-landing-resources:/app/resources
     restart: unless-stopped

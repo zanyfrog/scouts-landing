@@ -236,25 +236,8 @@ async function readImageDateTime(file) {
   return lastModified;
 }
 function readFileAsDataUrl(file) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve({ src: String(reader.result || ""), mediaType: detectMediaType(reader.result, file.type) }); reader.onerror = () => reject(reader.error || new Error("Could not read file")); reader.readAsDataURL(file); }); }
-function storePatrolsSnapshot() {
-  try {
-    window.localStorage.setItem("troop883-patrols", JSON.stringify(patrols.map(serializePatrol)));
-  } catch (error) {}
-}
-function storeEventsSnapshot() {
-  try {
-    window.localStorage.setItem("troop883-events", JSON.stringify(events));
-  } catch (error) {
-    if (error?.name === "QuotaExceededError") {
-      try {
-        window.localStorage.removeItem("troop883-events");
-      } catch (removeError) {}
-      return false;
-    }
-    throw error;
-  }
-  return true;
-}
+function storePatrolsSnapshot() {}
+function storeEventsSnapshot() { return true; }
 async function saveEvents() {
   events = events.map((event) => {
     const gallery = sortGalleryByDateTime(event.gallery || []);
@@ -412,6 +395,41 @@ function isUpcomingEvent(event) {
   const endDate = parseEventEndDate(event) || parseEventStartDate(event);
   if (!endDate) return false;
   return startOfDay(endDate).getTime() >= comparisonDate;
+}
+const publicFutureScheduleLabel = "";
+const publicFutureLocationLabel = "";
+function shouldHidePublicFutureEventInfo(event) { return !currentActor?.authenticated && isUpcomingEvent(event); }
+function eventDisplayDateLabel(event) { return shouldHidePublicFutureEventInfo(event) ? publicFutureScheduleLabel : (event.dateLabel || formatEventListDate(event)); }
+function eventDisplayLocationLabel(event) { return shouldHidePublicFutureEventInfo(event) ? publicFutureLocationLabel : (event.location || event.homeBase || "Location TBD"); }
+function eventDisplayHomeBaseLabel(event) { return shouldHidePublicFutureEventInfo(event) ? publicFutureLocationLabel : (event.homeBase || "Home base TBD"); }
+function eventDisplayStartLabel(event) { return shouldHidePublicFutureEventInfo(event) ? publicFutureScheduleLabel : formatExactEventDateTime(event.startDate); }
+function eventDisplayEndLabel(event) { return shouldHidePublicFutureEventInfo(event) ? publicFutureScheduleLabel : formatExactEventDateTime(event.endDate || event.startDate); }
+function activityDisplayDateLabel(activity, event) { return shouldHidePublicFutureEventInfo(event) ? publicFutureScheduleLabel : `${formatExactEventDateTime(activity.startDate)}${activity.endDate ? ` - ${formatExactEventDateTime(activity.endDate)}` : ""}`; }
+function activityDisplayLocationLabel(activity, event) { return shouldHidePublicFutureEventInfo(event) ? publicFutureLocationLabel : (activity.location || "Location TBD"); }
+function displayRepeatSummary(event) { return shouldHidePublicFutureEventInfo(event) ? "" : formatRepeatSummary(event); }
+function shouldShowPublicEventMap(event) { return !shouldHidePublicFutureEventInfo(event) && Boolean(event.homeBase || event.location); }
+function truncateCardActivityLabel(text, maxLength = 25) {
+  const normalized = String(text || "").trim();
+  if (!normalized) return "";
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+function cardActivityLabels(event) {
+  return (event?.activities || [])
+    .map((activity) => truncateCardActivityLabel(activity?.description))
+    .filter(Boolean)
+    .slice(0, 3);
+}
+function eventCardDateLabel(event) {
+  if (shouldHidePublicFutureEventInfo(event)) return "";
+  return String(event?.dateLabel || formatEventListDate(event) || "").trim();
+}
+function eventCardLocationLabel(event) {
+  if (shouldHidePublicFutureEventInfo(event)) return "";
+  return String(event?.location || event?.homeBase || "").trim();
+}
+function shouldSkipEventCardNavigation(target) {
+  return Boolean(target?.closest("button, a, input, select, textarea, summary, details, [data-slide], [data-open-card-media]"));
 }
 function isWalkersvilleEvent(event) {
   const homeBase = String(event?.homeBase || event?.location || "").trim().toLowerCase();
@@ -1349,6 +1367,10 @@ async function openCalendarMonth(monthKey, dateKey = "") {
 }
 async function loadEventData(fallbackEvents = []) { return Array.isArray(fallbackEvents) ? fallbackEvents : []; }
 function resetOrmBackedData() {
+  try {
+    window.localStorage.removeItem("troop883-events");
+    window.localStorage.removeItem("troop883-patrols");
+  } catch (error) {}
   scouts = [];
   adults = [];
   adultLeaders = [];
@@ -1447,7 +1469,12 @@ function renderResourcesRoute() { app.innerHTML = `${topNav()}<section class="da
 function renderLandingScrollerCard(event, index, currentIndex) {
   const mediaItems = getDisplayMediaItems(event);
   const isCurrent = index === currentIndex;
-  return `<article class="event-card landing-event-card${isAdultEvent(event) ? " adult-event-theme" : ""}${isCurrent ? " is-current" : ""}" data-upcoming-card="${index}"${isCurrent ? " data-upcoming-current" : ""}><div class="image-wrap">${mediaItems.length > 1 ? `<div class="carousel" data-index="0"><div class="carousel-track">${mediaItems.map((item, mediaIndex) => renderEventCardMedia(event, item, mediaIndex, mediaIndex === 0)).join("")}</div><button class="carousel-button prev" type="button" aria-label="Previous media">&#8249;</button><button class="carousel-button next" type="button" aria-label="Next media">&#8250;</button><div class="carousel-dots">${mediaItems.map((_, mediaIndex) => `<button class="carousel-dot${mediaIndex === 0 ? " is-active" : ""}" type="button" data-slide="${mediaIndex}" aria-label="Go to media ${mediaIndex + 1}"></button>`).join("")}</div></div>` : renderEventCardMedia(event, mediaItems[0], 0, null)}<span class="category-pill">${event.category}</span></div><div class="event-content"><p class="event-date">${event.dateLabel || formatEventListDate(event)}</p><h3><a class="text-link" href="#/events/${event.id}">${event.title}</a></h3><p class="event-description">${event.description || "More troop event details are coming soon."}</p><div class="event-meta"><span>${event.location || event.homeBase || "Location TBD"}</span><span>${event.audience || "Troop"}</span></div><a class="button primary landing-event-button" href="#/events/${event.id}">View details</a></div></article>`;
+  const activityLabels = cardActivityLabels(event);
+  const locationLabel = eventCardLocationLabel(event);
+  const dateLabel = eventCardDateLabel(event);
+  const scheduleItemClass = dateLabel ? "landing-event-meta-item" : "landing-event-meta-item is-empty";
+  const locationItemClass = locationLabel ? "landing-event-meta-item" : "landing-event-meta-item is-empty";
+  return `<article class="event-card landing-event-card${isAdultEvent(event) ? " adult-event-theme" : ""}${isCurrent ? " is-current" : ""}" data-upcoming-card="${index}"${isCurrent ? " data-upcoming-current" : ""} data-open-event-card="#/events/${event.id}" tabindex="0" role="link" aria-label="Open event ${event.title}"><div class="image-wrap">${mediaItems.length > 1 ? `<div class="carousel" data-index="0"><div class="carousel-track">${mediaItems.map((item, mediaIndex) => renderEventCardMedia(event, item, mediaIndex, mediaIndex === 0)).join("")}</div><button class="carousel-button prev" type="button" aria-label="Previous media">&#8249;</button><button class="carousel-button next" type="button" aria-label="Next media">&#8250;</button><div class="carousel-dots">${mediaItems.map((_, mediaIndex) => `<button class="carousel-dot${mediaIndex === 0 ? " is-active" : ""}" type="button" data-slide="${mediaIndex}" aria-label="Go to media ${mediaIndex + 1}"></button>`).join("")}</div></div>` : renderEventCardMedia(event, mediaItems[0], 0, null)}<span class="category-pill">${event.category}</span></div><div class="event-content landing-event-content"><h3>${event.title}</h3><p class="event-description">${event.description || "More troop event details are coming soon."}</p><div class="landing-event-activities-wrap">${activityLabels.length ? `<ul class="landing-event-activities">${activityLabels.map((label) => `<li title="${label}">${label}</li>`).join("")}</ul>` : `<div class="landing-event-activities-empty" aria-hidden="true"></div>`}</div><div class="landing-event-footer"><div class="${scheduleItemClass}"${dateLabel ? ` title="${dateLabel}"` : ""}><span class="landing-event-meta-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1a3 3 0 0 1 3 3v11a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V7a3 3 0 0 1 3-3h1V3a1 1 0 0 1 1-1Zm13 8H4v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8ZM5 6a1 1 0 0 0-1 1v1h16V7a1 1 0 0 0-1-1H5Z" fill="currentColor"/></svg></span><span class="landing-event-meta-text">${dateLabel}</span></div><div class="${locationItemClass}"${locationLabel ? ` title="${locationLabel}"` : ""}><span class="landing-event-meta-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M12 2a7 7 0 0 1 7 7c0 4.95-5.06 10.7-6.34 12.08a.9.9 0 0 1-1.32 0C10.06 19.7 5 13.95 5 9a7 7 0 0 1 7-7Zm0 9.5A2.5 2.5 0 1 0 12 6a2.5 2.5 0 0 0 0 5.5Z" fill="currentColor"/></svg></span><span class="landing-event-meta-text">${locationLabel}</span></div></div></div></article>`;
 }
 function renderPublic() {
   const sortedEvents = getSortedEvents();
@@ -1733,6 +1760,12 @@ window.addEventListener("hashchange", async () => {
   hydrateLandingEventWindowMedia().catch(() => {});
 });
 document.addEventListener("click", async (event) => {
+  const openEventCard = event.target.closest("[data-open-event-card]");
+  if (openEventCard && !shouldSkipEventCardNavigation(event.target)) {
+    window.location.hash = openEventCard.dataset.openEventCard || "#/events";
+    return;
+  }
+
   const showAddPatrolButton = event.target.closest("[data-show-add-patrol]");
   if (showAddPatrolButton) {
     if (!canEditScouts()) return;
@@ -2112,6 +2145,11 @@ document.addEventListener("click", async (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeMediaLightbox();
+  if ((event.key === "Enter" || event.key === " ") && event.target?.matches?.("[data-open-event-card]")) {
+    event.preventDefault();
+    const route = event.target.dataset.openEventCard;
+    if (route) window.location.hash = route;
+  }
 });
 document.addEventListener("focusout", async (event) => {
   const eventEditorField = event.target.closest(eventEditorFieldSelector);
