@@ -168,9 +168,9 @@ function normalizeGalleryItem(item, index = 0) {
 }
 function getGalleryItemDateTime(item, index = 0) { const timestamp = Date.parse(item?.imageDateTime || item?.capturedAt || item?.dateTaken || item?.lastModified || item?.uploadedAt || item?.createdAt || item?.datetime || ""); return Number.isFinite(timestamp) ? timestamp : index; }
 function sortGalleryByDateTime(items) { return (Array.isArray(items) ? items : []).map((item, index) => ({ item: normalizeGalleryItem(item, index), index })).filter(({ item }) => item.src).sort((a, b) => getGalleryItemDateTime(a.item, a.index) - getGalleryItemDateTime(b.item, b.index) || a.index - b.index).map(({ item }, index) => ({ ...item, id: item.id || `image-${index + 1}` })); }
-function normalizeEvent(record) { const rawGallery = Array.isArray(record.gallery) ? record.gallery.filter(Boolean) : String(record.gallery || "").split(/\r?\n/).map((image) => image.trim()).filter(Boolean); const image = record.image || (typeof rawGallery[0] === "string" ? rawGallery[0] : rawGallery[0]?.src) || scoutOrgLogo; const homeBase = normalizeEventLocation(record.homeBase || record.location || ""); const activities = Array.isArray(record.activities) ? record.activities.map((activity, index) => normalizeActivity(activity, index)) : []; const gallery = sortGalleryByDateTime(rawGallery.map((item, index) => normalizeGalleryItem(item, index))); const repeatEnabled = typeof record.repeatEnabled === "boolean" ? record.repeatEnabled : String(record.repeatEnabled).toLowerCase() === "true"; const repeatInterval = Math.max(1, Number(record.repeatInterval) || 1); return { id: record.id, title: record.title || "Untitled event", category: record.category || "Event", startDate: record.startDate || "", endDate: record.endDate || "", dateLabel: record.dateLabel || "", homeBase, location: homeBase, audience: record.audience || "", description: record.description || "", detailNote: record.detailNote || "", activities, image, gallery: gallery.length ? gallery : [normalizeGalleryItem({ src: image }, 0)], upcoming: typeof record.upcoming === "boolean" ? record.upcoming : String(record.upcoming).toLowerCase() === "true", repeatEnabled, repeatFrequency: record.repeatFrequency || "weekly", repeatInterval, repeatUntil: record.repeatUntil || "", repeatMonthlyPattern: record.repeatMonthlyPattern || "date", repeatMonthlyOrdinal: record.repeatMonthlyOrdinal || "third", repeatMonthlyWeekday: record.repeatMonthlyWeekday || "monday" }; }
+function normalizeEvent(record) { const rawGallery = Array.isArray(record.gallery) ? record.gallery.filter(Boolean) : String(record.gallery || "").split(/\r?\n/).map((image) => image.trim()).filter(Boolean); const image = record.image || (typeof rawGallery[0] === "string" ? rawGallery[0] : rawGallery[0]?.src) || ""; const homeBase = normalizeEventLocation(record.homeBase || record.location || ""); const activities = Array.isArray(record.activities) ? record.activities.map((activity, index) => normalizeActivity(activity, index)) : []; const gallery = sortGalleryByDateTime(rawGallery.map((item, index) => normalizeGalleryItem(item, index))); const repeatEnabled = typeof record.repeatEnabled === "boolean" ? record.repeatEnabled : String(record.repeatEnabled).toLowerCase() === "true"; const repeatInterval = Math.max(1, Number(record.repeatInterval) || 1); return { id: record.id, title: record.title || "Untitled event", category: record.category || "Event", startDate: record.startDate || "", endDate: record.endDate || "", dateLabel: record.dateLabel || "", homeBase, location: homeBase, audience: record.audience || "", description: record.description || "", detailNote: record.detailNote || "", activities, image, gallery: gallery.length ? gallery : (image ? [normalizeGalleryItem({ src: image }, 0)] : []), upcoming: typeof record.upcoming === "boolean" ? record.upcoming : String(record.upcoming).toLowerCase() === "true", repeatEnabled, repeatFrequency: record.repeatFrequency || "weekly", repeatInterval, repeatUntil: record.repeatUntil || "", repeatMonthlyPattern: record.repeatMonthlyPattern || "date", repeatMonthlyOrdinal: record.repeatMonthlyOrdinal || "third", repeatMonthlyWeekday: record.repeatMonthlyWeekday || "monday" }; }
 function getGalleryImagesFromEditor() { return sortGalleryByDateTime([...document.querySelectorAll("[data-gallery-item]")].map((item, index) => { const currentEvent = getEventById((window.location.hash || "").replace("#/events/", "")); const existing = currentEvent?.gallery?.find((galleryItem) => galleryItem.id === item.dataset.galleryItem) || normalizeGalleryItem({ src: item.dataset.gallerySrc }, index); const nextDescription = item.querySelector("[data-gallery-description]")?.value.trim() || ""; const nextTitle = nextDescription || item.querySelector("[data-gallery-title]")?.value.trim() || ""; return { ...existing, src: item.dataset.gallerySrc || existing.src, title: nextTitle, description: nextDescription }; }).filter((item) => item.src)); }
-function setGalleryImagesInEditor(images) { const galleryItems = sortGalleryByDateTime(images); const eventId = (window.location.hash || "").replace("#/events/", ""); const currentEvent = getEventById(eventId); if (currentEvent) { currentEvent.gallery = galleryItems; if (!galleryItems.some((item) => item.src === currentEvent.image)) currentEvent.image = galleryItems[0]?.src || scoutOrgLogo; } }
+function setGalleryImagesInEditor(images) { const galleryItems = sortGalleryByDateTime(images); const eventId = (window.location.hash || "").replace("#/events/", ""); const currentEvent = getEventById(eventId); if (currentEvent) { currentEvent.gallery = galleryItems; if (!galleryItems.some((item) => item.src === currentEvent.image)) currentEvent.image = galleryItems[0]?.src || ""; } }
 function parseExifDateTime(value) {
   const match = String(value || "").trim().match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
   if (!match) return "";
@@ -241,7 +241,7 @@ function storeEventsSnapshot() { return true; }
 async function saveEvents() {
   events = events.map((event) => {
     const gallery = sortGalleryByDateTime(event.gallery || []);
-    const image = gallery.some((item) => item.src === event.image) ? event.image : gallery[0]?.src || event.image || scoutOrgLogo;
+    const image = gallery.some((item) => item.src === event.image) ? event.image : gallery[0]?.src || "";
     return { ...event, image, gallery };
   });
   await postJson("/api/events", { events: events.map((event) => ({ ...event })) });
@@ -305,7 +305,7 @@ function syncEventFromEditor(eventId) {
   });
   if (nextGallery.length) {
     event.gallery = sortGalleryByDateTime(nextGallery);
-    if (!event.gallery.some((item) => item.src === event.image)) event.image = event.gallery[0]?.src || scoutOrgLogo;
+    if (!event.gallery.some((item) => item.src === event.image)) event.image = event.gallery[0]?.src || "";
   }
   return event;
 }
@@ -424,6 +424,19 @@ function eventCardDateLabel(event) {
   if (shouldHidePublicFutureEventInfo(event)) return "";
   return String(event?.dateLabel || formatEventListDate(event) || "").trim();
 }
+function renderLandingEventDateLabel(dateLabel) {
+  const label = String(dateLabel || "").trim();
+  if (!label) return "";
+  const rangeParts = label.split(" - ");
+  if (rangeParts.length > 1) {
+    return `<span class="landing-event-date-stack"><span>${rangeParts[0]}</span><span>- ${rangeParts.slice(1).join(" - ")}</span></span>`;
+  }
+  const dateTimeMatch = label.match(/^(.+\d{4}),\s*(.+)$/);
+  if (dateTimeMatch) {
+    return `<span class="landing-event-date-stack"><span>${dateTimeMatch[1]}</span><span>${dateTimeMatch[2]}</span></span>`;
+  }
+  return `<span class="landing-event-date-stack"><span>${label}</span></span>`;
+}
 function eventCardLocationLabel(event) {
   if (shouldHidePublicFutureEventInfo(event)) return "";
   return String(event?.location || event?.homeBase || "").trim();
@@ -454,7 +467,7 @@ function getSandyPointDefaultGalleryItem() {
   return normalizeGalleryItem({ src: "https://dnr.maryland.gov/publiclands/PublishingImages/sandy-point-drone-photo.jpg", title: "Sandy Point State Park", description: "Sandy Point State Park" }, 0);
 }
 function getDisplayMediaItems(event) {
-  const mediaItems = event?.gallery?.length ? sortGalleryByDateTime(event.gallery) : [normalizeGalleryItem({ src: event?.image }, 0)];
+  const mediaItems = event?.gallery?.length ? sortGalleryByDateTime(event.gallery) : [normalizeGalleryItem({ src: event?.image || scoutOrgLogo }, 0)];
   const primaryIndex = mediaItems.findIndex((item) => item.src === event?.image);
   if (primaryIndex > 0) {
     const [primaryItem] = mediaItems.splice(primaryIndex, 1);
@@ -1472,9 +1485,9 @@ function renderLandingScrollerCard(event, index, currentIndex) {
   const activityLabels = cardActivityLabels(event);
   const locationLabel = eventCardLocationLabel(event);
   const dateLabel = eventCardDateLabel(event);
-  const scheduleItemClass = dateLabel ? "landing-event-meta-item" : "landing-event-meta-item is-empty";
+  const scheduleItemClass = dateLabel ? "landing-event-meta-item is-date" : "landing-event-meta-item is-date is-empty";
   const locationItemClass = locationLabel ? "landing-event-meta-item" : "landing-event-meta-item is-empty";
-  return `<article class="event-card landing-event-card${isAdultEvent(event) ? " adult-event-theme" : ""}${isCurrent ? " is-current" : ""}" data-upcoming-card="${index}"${isCurrent ? " data-upcoming-current" : ""} data-open-event-card="#/events/${event.id}" tabindex="0" role="link" aria-label="Open event ${event.title}"><div class="image-wrap">${mediaItems.length > 1 ? `<div class="carousel" data-index="0"><div class="carousel-track">${mediaItems.map((item, mediaIndex) => renderEventCardMedia(event, item, mediaIndex, mediaIndex === 0)).join("")}</div><button class="carousel-button prev" type="button" aria-label="Previous media">&#8249;</button><button class="carousel-button next" type="button" aria-label="Next media">&#8250;</button><div class="carousel-dots">${mediaItems.map((_, mediaIndex) => `<button class="carousel-dot${mediaIndex === 0 ? " is-active" : ""}" type="button" data-slide="${mediaIndex}" aria-label="Go to media ${mediaIndex + 1}"></button>`).join("")}</div></div>` : renderEventCardMedia(event, mediaItems[0], 0, null)}<span class="category-pill">${event.category}</span></div><div class="event-content landing-event-content"><h3>${event.title}</h3><p class="event-description">${event.description || "More troop event details are coming soon."}</p><div class="landing-event-activities-wrap">${activityLabels.length ? `<ul class="landing-event-activities">${activityLabels.map((label) => `<li title="${label}">${label}</li>`).join("")}</ul>` : `<div class="landing-event-activities-empty" aria-hidden="true"></div>`}</div><div class="landing-event-footer"><div class="${scheduleItemClass}"${dateLabel ? ` title="${dateLabel}"` : ""}><span class="landing-event-meta-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1a3 3 0 0 1 3 3v11a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V7a3 3 0 0 1 3-3h1V3a1 1 0 0 1 1-1Zm13 8H4v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8ZM5 6a1 1 0 0 0-1 1v1h16V7a1 1 0 0 0-1-1H5Z" fill="currentColor"/></svg></span><span class="landing-event-meta-text">${dateLabel}</span></div><div class="${locationItemClass}"${locationLabel ? ` title="${locationLabel}"` : ""}><span class="landing-event-meta-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M12 2a7 7 0 0 1 7 7c0 4.95-5.06 10.7-6.34 12.08a.9.9 0 0 1-1.32 0C10.06 19.7 5 13.95 5 9a7 7 0 0 1 7-7Zm0 9.5A2.5 2.5 0 1 0 12 6a2.5 2.5 0 0 0 0 5.5Z" fill="currentColor"/></svg></span><span class="landing-event-meta-text">${locationLabel}</span></div></div></div></article>`;
+  return `<article class="event-card landing-event-card${isAdultEvent(event) ? " adult-event-theme" : ""}${isCurrent ? " is-current" : ""}" data-upcoming-card="${index}"${isCurrent ? " data-upcoming-current" : ""} data-open-event-card="#/events/${event.id}" tabindex="0" role="link" aria-label="Open event ${event.title}"><div class="image-wrap">${mediaItems.length > 1 ? `<div class="carousel" data-index="0"><div class="carousel-track">${mediaItems.map((item, mediaIndex) => renderEventCardMedia(event, item, mediaIndex, mediaIndex === 0)).join("")}</div><button class="carousel-button prev" type="button" aria-label="Previous media">&#8249;</button><button class="carousel-button next" type="button" aria-label="Next media">&#8250;</button><div class="carousel-dots">${mediaItems.map((_, mediaIndex) => `<button class="carousel-dot${mediaIndex === 0 ? " is-active" : ""}" type="button" data-slide="${mediaIndex}" aria-label="Go to media ${mediaIndex + 1}"></button>`).join("")}</div></div>` : renderEventCardMedia(event, mediaItems[0], 0, null)}<span class="category-pill">${event.category}</span></div><div class="event-content landing-event-content"><h3>${event.title}</h3><p class="event-description">${event.description || "More troop event details are coming soon."}</p><div class="landing-event-activities-wrap">${activityLabels.length ? `<ul class="landing-event-activities">${activityLabels.map((label) => `<li title="${label}">${label}</li>`).join("")}</ul>` : `<div class="landing-event-activities-empty" aria-hidden="true"></div>`}</div><div class="landing-event-footer"><div class="${scheduleItemClass}"${dateLabel ? ` title="${dateLabel}"` : ""}><span class="landing-event-meta-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1a3 3 0 0 1 3 3v11a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V7a3 3 0 0 1 3-3h1V3a1 1 0 0 1 1-1Zm13 8H4v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8ZM5 6a1 1 0 0 0-1 1v1h16V7a1 1 0 0 0-1-1H5Z" fill="currentColor"/></svg></span>${renderLandingEventDateLabel(dateLabel)}</div><div class="${locationItemClass}"${locationLabel ? ` title="${locationLabel}"` : ""}><span class="landing-event-meta-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M12 2a7 7 0 0 1 7 7c0 4.95-5.06 10.7-6.34 12.08a.9.9 0 0 1-1.32 0C10.06 19.7 5 13.95 5 9a7 7 0 0 1 7-7Zm0 9.5A2.5 2.5 0 1 0 12 6a2.5 2.5 0 0 0 0 5.5Z" fill="currentColor"/></svg></span><span class="landing-event-meta-text">${locationLabel}</span></div></div></div></article>`;
 }
 function renderPublic() {
   const sortedEvents = getSortedEvents();
@@ -1530,7 +1543,7 @@ function renderEventRoute(eventId) {
   if (!event) { renderNotFound(); return; }
   eventEditorSaveStatus = "saved";
   const visitorView = !canSeeOrgChart();
-  const gallery = getDisplayMediaItems(event);
+  const gallery = visitorView ? getDisplayMediaItems(event) : (event.gallery?.length ? sortGalleryByDateTime(event.gallery) : (event.image ? [normalizeGalleryItem({ src: event.image }, 0)] : []));
   const audienceOptions = eventAudienceOptions.includes(event.audience) ? eventAudienceOptions : [...eventAudienceOptions, event.audience].filter(Boolean);
   const monthlyPattern = event.repeatMonthlyPattern || "date";
   const monthlyOrdinal = event.repeatMonthlyOrdinal || "third";
@@ -1968,8 +1981,7 @@ document.addEventListener("click", async (event) => {
     if (!currentEvent) return;
     const imageId = removeGalleryImageButton.dataset.removeGalleryImage;
     currentEvent.gallery = sortGalleryByDateTime((currentEvent.gallery || []).filter((image) => image.id !== imageId));
-    if (!currentEvent.gallery.length) currentEvent.gallery = [normalizeGalleryItem({ src: scoutOrgLogo }, 0)];
-    if (!currentEvent.gallery.some((image) => image.src === currentEvent.image)) currentEvent.image = currentEvent.gallery[0]?.src || scoutOrgLogo;
+    if (!currentEvent.gallery.some((image) => image.src === currentEvent.image)) currentEvent.image = currentEvent.gallery[0]?.src || "";
     setGalleryImagesInEditor(currentEvent.gallery);
     await saveEvents();
     renderRoute();
@@ -2425,7 +2437,7 @@ document.addEventListener("change", async (event) => {
         const currentEvent = syncEventFromEditor(eventId);
         if (!currentEvent) return;
         currentEvent.gallery = sortGalleryByDateTime([...(currentEvent.gallery || []), ...mediaItems.map((item, index) => normalizeGalleryItem(item, (currentEvent.gallery || []).length + index))]);
-        if (!currentEvent.gallery.some((item) => item.src === currentEvent.image)) currentEvent.image = currentEvent.gallery[0]?.src || scoutOrgLogo;
+        if (!currentEvent.gallery.some((item) => item.src === currentEvent.image)) currentEvent.image = currentEvent.gallery[0]?.src || "";
         setGalleryImagesInEditor(currentEvent.gallery);
         eventImageUploadInput.value = "";
         await saveEvents();
