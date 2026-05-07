@@ -170,7 +170,7 @@ function getGalleryItemDateTime(item, index = 0) { const timestamp = Date.parse(
 function sortGalleryByDateTime(items) { return (Array.isArray(items) ? items : []).map((item, index) => ({ item: normalizeGalleryItem(item, index), index })).filter(({ item }) => item.src).sort((a, b) => getGalleryItemDateTime(a.item, a.index) - getGalleryItemDateTime(b.item, b.index) || a.index - b.index).map(({ item }, index) => ({ ...item, id: item.id || `image-${index + 1}` })); }
 function normalizeEvent(record) { const rawGallery = Array.isArray(record.gallery) ? record.gallery.filter(Boolean) : String(record.gallery || "").split(/\r?\n/).map((image) => image.trim()).filter(Boolean); const image = record.image || (typeof rawGallery[0] === "string" ? rawGallery[0] : rawGallery[0]?.src) || ""; const homeBase = normalizeEventLocation(record.homeBase || record.location || ""); const activities = Array.isArray(record.activities) ? record.activities.map((activity, index) => normalizeActivity(activity, index)) : []; const gallery = sortGalleryByDateTime(rawGallery.map((item, index) => normalizeGalleryItem(item, index))); const repeatEnabled = typeof record.repeatEnabled === "boolean" ? record.repeatEnabled : String(record.repeatEnabled).toLowerCase() === "true"; const repeatInterval = Math.max(1, Number(record.repeatInterval) || 1); return { id: record.id, title: record.title || "Untitled event", category: record.category || "Event", startDate: record.startDate || "", endDate: record.endDate || "", dateLabel: record.dateLabel || "", homeBase, location: homeBase, audience: record.audience || "", description: record.description || "", detailNote: record.detailNote || "", activities, image, gallery: gallery.length ? gallery : (image ? [normalizeGalleryItem({ src: image }, 0)] : []), upcoming: typeof record.upcoming === "boolean" ? record.upcoming : String(record.upcoming).toLowerCase() === "true", repeatEnabled, repeatFrequency: record.repeatFrequency || "weekly", repeatInterval, repeatUntil: record.repeatUntil || "", repeatMonthlyPattern: record.repeatMonthlyPattern || "date", repeatMonthlyOrdinal: record.repeatMonthlyOrdinal || "third", repeatMonthlyWeekday: record.repeatMonthlyWeekday || "monday" }; }
 function getGalleryImagesFromEditor() { return sortGalleryByDateTime([...document.querySelectorAll("[data-gallery-item]")].map((item, index) => { const currentEvent = getEventById((window.location.hash || "").replace("#/events/", "")); const existing = currentEvent?.gallery?.find((galleryItem) => galleryItem.id === item.dataset.galleryItem) || normalizeGalleryItem({ src: item.dataset.gallerySrc }, index); const nextDescription = item.querySelector("[data-gallery-description]")?.value.trim() || ""; const nextTitle = nextDescription || item.querySelector("[data-gallery-title]")?.value.trim() || ""; return { ...existing, src: item.dataset.gallerySrc || existing.src, title: nextTitle, description: nextDescription }; }).filter((item) => item.src)); }
-function setGalleryImagesInEditor(images) { const galleryItems = sortGalleryByDateTime(images); const eventId = (window.location.hash || "").replace("#/events/", ""); const currentEvent = getEventById(eventId); if (currentEvent) { currentEvent.gallery = galleryItems; if (!galleryItems.some((item) => item.src === currentEvent.image)) currentEvent.image = galleryItems[0]?.src || ""; } }
+function setGalleryImagesInEditor(images) { const galleryItems = sortGalleryByDateTime(images); const eventId = (window.location.hash || "").replace("#/events/", ""); const currentEvent = getEventById(eventId); if (currentEvent) { currentEvent.gallery = galleryItems; if (!currentEvent.image) currentEvent.image = galleryItems[0]?.src || ""; } }
 function parseExifDateTime(value) {
   const match = String(value || "").trim().match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
   if (!match) return "";
@@ -241,7 +241,7 @@ function storeEventsSnapshot() { return true; }
 async function saveEvents() {
   events = events.map((event) => {
     const gallery = sortGalleryByDateTime(event.gallery || []);
-    const image = gallery.some((item) => item.src === event.image) ? event.image : gallery[0]?.src || "";
+    const image = event.image || gallery[0]?.src || "";
     return { ...event, image, gallery };
   });
   await postJson("/api/events", { events: events.map((event) => ({ ...event })) });
@@ -467,7 +467,13 @@ function getSandyPointDefaultGalleryItem() {
   return normalizeGalleryItem({ src: "https://dnr.maryland.gov/publiclands/PublishingImages/sandy-point-drone-photo.jpg", title: "Sandy Point State Park", description: "Sandy Point State Park" }, 0);
 }
 function getDisplayMediaItems(event) {
-  const mediaItems = event?.gallery?.length ? sortGalleryByDateTime(event.gallery) : [normalizeGalleryItem({ src: event?.image || scoutOrgLogo }, 0)];
+  const mediaItems = event?.gallery?.length ? sortGalleryByDateTime(event.gallery) : [];
+  if (event?.image && !mediaItems.some((item) => item.src === event.image)) {
+    mediaItems.unshift(normalizeGalleryItem({ src: event.image, title: event.title, description: event.description }, 0));
+  }
+  if (!mediaItems.length) {
+    mediaItems.push(normalizeGalleryItem({ src: scoutOrgLogo }, 0));
+  }
   const primaryIndex = mediaItems.findIndex((item) => item.src === event?.image);
   if (primaryIndex > 0) {
     const [primaryItem] = mediaItems.splice(primaryIndex, 1);
@@ -1980,8 +1986,9 @@ document.addEventListener("click", async (event) => {
     const currentEvent = syncEventFromEditor(eventId);
     if (!currentEvent) return;
     const imageId = removeGalleryImageButton.dataset.removeGalleryImage;
+    const removedImage = (currentEvent.gallery || []).find((image) => image.id === imageId);
     currentEvent.gallery = sortGalleryByDateTime((currentEvent.gallery || []).filter((image) => image.id !== imageId));
-    if (!currentEvent.gallery.some((image) => image.src === currentEvent.image)) currentEvent.image = currentEvent.gallery[0]?.src || "";
+    if (removedImage?.src && removedImage.src === currentEvent.image) currentEvent.image = currentEvent.gallery[0]?.src || "";
     setGalleryImagesInEditor(currentEvent.gallery);
     await saveEvents();
     renderRoute();
@@ -2437,7 +2444,7 @@ document.addEventListener("change", async (event) => {
         const currentEvent = syncEventFromEditor(eventId);
         if (!currentEvent) return;
         currentEvent.gallery = sortGalleryByDateTime([...(currentEvent.gallery || []), ...mediaItems.map((item, index) => normalizeGalleryItem(item, (currentEvent.gallery || []).length + index))]);
-        if (!currentEvent.gallery.some((item) => item.src === currentEvent.image)) currentEvent.image = currentEvent.gallery[0]?.src || "";
+        if (!currentEvent.image) currentEvent.image = currentEvent.gallery[0]?.src || "";
         setGalleryImagesInEditor(currentEvent.gallery);
         eventImageUploadInput.value = "";
         await saveEvents();
