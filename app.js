@@ -494,7 +494,7 @@ function getDisplayMediaItems(event) {
     const sandyPointDefault = getSandyPointDefaultGalleryItem();
     return [sandyPointDefault, ...mediaItems.filter((item) => item?.src && item.src !== sandyPointDefault.src)];
   }
-  if (!isUpcomingEvent(event) || !isWalkersvilleEvent(event)) return mediaItems;
+  if (!isUpcomingEvent(event) || !isWalkersvilleEvent(event) || hasPrimaryEventMedia(event)) return mediaItems;
   const walkersvilleDefault = getWalkersvilleDefaultGalleryItem();
   if (!walkersvilleDefault?.src) return mediaItems;
   return [walkersvilleDefault, ...mediaItems.filter((item) => item?.src && item.src !== walkersvilleDefault.src)];
@@ -557,6 +557,22 @@ function occursOnRecurringRule(event, date, start, end) {
   return false;
 }
 function eventOccursOnDate(event, date) { const start = parseEventStartDate(event); const end = parseEventEndDate(event); if (!start || !end || !date) return false; if (event.repeatEnabled) return occursOnRecurringRule(event, date, start, end); const target = startOfDay(date).getTime(); return target >= startOfDay(start).getTime() && target <= startOfDay(end).getTime(); }
+function eventForCalendarDate(event, date) {
+  if (!event?.repeatEnabled || !date || !eventOccursOnDate(event, date)) return event;
+  const start = parseEventStartDate(event);
+  const end = parseEventEndDate(event) || start;
+  if (!start || !end) return event;
+  const durationMs = end.getTime() - start.getTime();
+  const occurrenceStart = new Date(date);
+  occurrenceStart.setHours(start.getHours(), start.getMinutes(), start.getSeconds(), start.getMilliseconds());
+  const occurrenceEnd = new Date(occurrenceStart.getTime() + durationMs);
+  return {
+    ...event,
+    startDate: formatDateTimeLocalValue(occurrenceStart.toISOString()),
+    endDate: formatDateTimeLocalValue(occurrenceEnd.toISOString()),
+    dateLabel: formatEventDateLabelFromRange(formatDateTimeLocalValue(occurrenceStart.toISOString()), formatDateTimeLocalValue(occurrenceEnd.toISOString())),
+  };
+}
 function eventOccursInMonth(event, year, month) {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   for (let day = 1; day <= daysInMonth; day += 1) {
@@ -1544,8 +1560,9 @@ function renderEventsIndex() {
     .filter((event) => eventOccursOnDate(event, selectedDateObj))
     .sort((a, b) => (parseEventStartDate(a)?.getTime() || 0) - (parseEventStartDate(b)?.getTime() || 0));
   const storedSelectedEventId = getSelectedCalendarEventId();
-  const selectedCalendarEvent = monthEvents.find((event) => event.id === storedSelectedEventId) || selectedDateEvents[0] || monthEvents[0] || null;
-  if (selectedCalendarEvent?.id !== storedSelectedEventId) setSelectedCalendarEventId(selectedCalendarEvent?.id || "");
+  const selectedCalendarBaseEvent = selectedDateEvents.find((event) => event.id === storedSelectedEventId) || selectedDateEvents[0] || monthEvents[0] || null;
+  const selectedCalendarEvent = selectedCalendarBaseEvent ? eventForCalendarDate(selectedCalendarBaseEvent, selectedDateObj) : null;
+  if (selectedCalendarBaseEvent?.id !== storedSelectedEventId) setSelectedCalendarEventId(selectedCalendarBaseEvent?.id || "");
   const calendarCells = buildCalendarCells(selectedMonth);
   const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const availableYears = [...new Set([prototypeToday.getFullYear() - 1, prototypeToday.getFullYear(), prototypeToday.getFullYear() + 1, ...events.map((event) => parseEventStartDate(event)?.getFullYear()).filter(Boolean)])].sort((a, b) => a - b);
