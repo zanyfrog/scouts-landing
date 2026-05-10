@@ -1318,6 +1318,9 @@ function getScoutsForAdult(adult) { const linkedScoutIds = new Set(adultScoutRel
 function getAvailableScoutsForAdult(adult) { const linkedScoutIds = new Set(adultScoutRelationships.filter((relationship) => relationship.adultId === adult.id).map((relationship) => relationship.scoutId)); return scouts.filter((scout) => !linkedScoutIds.has(scout.id)).sort((a, b) => a.name.localeCompare(b.name)); }
 let currentActor = null;
 let sessionToken = window.localStorage.getItem("troop883-auth-token") || "";
+let appLoading = false;
+let appLoadingMessage = "Loading";
+let authBusy = false;
 function authHeaders(extra = {}) { return { ...extra, ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}) }; }
 function assignedRoles() { return new Set([...(currentActor?.globalRoles || []), ...(currentActor?.unitRoles || []).map((assignment) => assignment.role)]); }
 function hasRole(role) { return assignedRoles().has(role); }
@@ -1408,10 +1411,13 @@ async function openCalendarMonth(monthKey, dateKey = "") {
   const selectedDate = getSelectedCalendarDate();
   setSelectedEventMonth(monthKey);
   setSelectedCalendarDate(dateKey || (selectedDate.startsWith(monthKey) ? selectedDate : `${monthKey}-01`));
+  setAppLoading("Loading calendar");
   try {
     await loadCalendarMonthEvents(monthKey);
   } catch (error) {
     console.warn(error);
+  } finally {
+    clearAppLoading();
   }
   renderRoute();
 }
@@ -1498,10 +1504,22 @@ function renderIdentityControls() {
   const viewer = getCurrentViewerIdentity();
   const markup = viewer
     ? `<div class="view-toggle" data-auth-session><span>${viewer.role}</span><strong>${viewer.name}</strong><button class="button secondary" type="button" data-logout>Log out</button></div>`
-    : `<details class="login-panel" data-auth-session><summary><span>Email login</span></summary><form class="view-toggle login-form" data-login-form><span>Member login</span><input type="email" data-login-email placeholder="email@example.com" aria-label="Email" autocomplete="username" /><div class="password-field"><input type="password" data-login-password placeholder="Password optional locally" aria-label="Password" autocomplete="current-password" /><button class="password-toggle" type="button" data-toggle-password aria-label="Show password">Show</button></div><input type="text" data-login-otp placeholder="MFA code" aria-label="MFA code" autocomplete="one-time-code" /><button class="button primary" type="submit">Log in</button></form></details>`;
+    : `<details class="login-panel" data-auth-session${authBusy ? " open" : ""}><summary><span>Email login</span></summary><form class="view-toggle login-form" data-login-form><span>${authBusy ? "Loading" : "Member login"}</span><input type="email" data-login-email placeholder="email@example.com" aria-label="Email" autocomplete="username"${authBusy ? " disabled" : ""} /><div class="password-field"><input type="password" data-login-password placeholder="Password optional locally" aria-label="Password" autocomplete="current-password"${authBusy ? " disabled" : ""} /><button class="password-toggle" type="button" data-toggle-password aria-label="Show password"${authBusy ? " disabled" : ""}>Show</button></div><input type="text" data-login-otp placeholder="MFA code" aria-label="MFA code" autocomplete="one-time-code"${authBusy ? " disabled" : ""} /><button class="button primary" type="submit"${authBusy ? " disabled" : ""}>${authBusy ? "Loading" : "Log In"}</button></form></details>`;
   headerActions.insertAdjacentHTML("afterbegin", markup);
 }
 const topNav = () => { const currentHash = window.location.hash || "#/"; return `<nav class="top-nav"><a class="nav-pill${currentHash === "#/" || currentHash === "" ? " is-active" : ""}" href="#/">Home</a><a class="nav-pill${currentHash.startsWith("#/events") ? " is-active" : ""}" href="#/events">Events</a><a class="nav-pill${currentHash.startsWith("#/resources") ? " is-active" : ""}" href="#/resources">Resources</a>${currentActor?.authenticated ? `<a class="nav-pill${currentHash.startsWith("#/scribe/attendance") ? " is-active" : ""}" href="#/scribe/attendance">Scribe Attendance</a>` : ""}${canEditScouts() ? `<a class="nav-pill${currentHash === "#/scouts" || currentHash.startsWith("#/scouts/") ? " is-active" : ""}" href="#/scouts">Scouts</a><a class="nav-pill${currentHash.startsWith("#/patrols") ? " is-active" : ""}" href="#/patrols">Patrols</a>` : ""}${canSeeOrgChart() ? `<a class="nav-pill${currentHash.startsWith("#/holidays") ? " is-active" : ""}" href="#/holidays">Holidays</a><a class="nav-pill${currentHash === "#/adult" || currentHash === "#/adults" || currentHash.startsWith("#/adults/") ? " is-active" : ""}" href="#/adults">Adults</a><a class="nav-pill${currentHash.startsWith("#/org-chart") ? " is-active" : ""}" href="#/org-chart">Org Chart</a>` : ""}<span class="nav-note">${currentActor?.authenticated ? `Signed in as ${getCurrentMode()}` : "Public visitor"}</span></nav>`; };
+function renderLoadingRoute() {
+  app.innerHTML = `${topNav()}<section class="dashboard-banner loading-route" aria-live="polite" aria-busy="true"><div><p class="eyebrow">Loading</p><h2>${appLoadingMessage || "Loading"}</h2><p class="intro compact">Please wait while the page finishes loading.</p></div><div class="loading-spinner" aria-hidden="true"></div></section>`;
+}
+function setAppLoading(message = "Loading") {
+  appLoading = true;
+  appLoadingMessage = message;
+  renderRoute();
+}
+function clearAppLoading() {
+  appLoading = false;
+  appLoadingMessage = "Loading";
+}
 const renderEventCard = (event) => { const mediaItems = getDisplayMediaItems(event); return `<article class="event-card${isAdultEvent(event) ? " adult-event-theme" : ""}"><div class="image-wrap">${mediaItems.length > 1 ? `<div class="carousel" data-index="0"><div class="carousel-track">${mediaItems.map((item, index) => renderEventCardMedia(event, item, index, index === 0)).join("")}</div><button class="carousel-button prev" type="button" aria-label="Previous media">&#8249;</button><button class="carousel-button next" type="button" aria-label="Next media">&#8250;</button><div class="carousel-dots">${mediaItems.map((_, index) => `<button class="carousel-dot${index === 0 ? " is-active" : ""}" type="button" data-slide="${index}" aria-label="Go to media ${index + 1}"></button>`).join("")}</div></div>` : renderEventCardMedia(event, mediaItems[0], 0, null)}<span class="category-pill">${event.category}</span></div><div class="event-content"><p class="event-date">${event.dateLabel}</p><h3><a class="text-link" href="#/events/${event.id}">${event.title}</a></h3><p class="event-description">${event.description}</p><div class="event-meta"><span>${event.location}</span><span>${event.audience}</span></div></div></article>`; };
 const renderParentEventCard = (event, registeredScouts = []) => { const mediaItems = getDisplayMediaItems(event); return `<article class="event-card${isAdultEvent(event) ? " adult-event-theme" : ""}"><div class="image-wrap">${mediaItems.length > 1 ? `<div class="carousel" data-index="0"><div class="carousel-track">${mediaItems.map((item, index) => renderEventCardMedia(event, item, index, index === 0)).join("")}</div><button class="carousel-button prev" type="button" aria-label="Previous media">&#8249;</button><button class="carousel-button next" type="button" aria-label="Next media">&#8250;</button><div class="carousel-dots">${mediaItems.map((_, index) => `<button class="carousel-dot${index === 0 ? " is-active" : ""}" type="button" data-slide="${index}" aria-label="Go to media ${index + 1}"></button>`).join("")}</div></div>` : renderEventCardMedia(event, mediaItems[0], 0, null)}<span class="category-pill">${event.category}</span></div><div class="event-content"><p class="event-date">${event.dateLabel}</p><h3><a class="text-link" href="#/events/${event.id}">${event.title}</a></h3><p class="event-description">${event.description}</p><div class="event-meta"><span>${event.location}</span><span>${event.audience}</span></div><div class="registered-scouts"><span class="registered-scouts-label">${registeredScouts.length === 1 ? "Registered scout" : "Registered scouts"}</span>${registeredScouts.map((scout) => `<span class="registered-scout-chip">${scout.name}</span>`).join("")}</div></div></article>`; };
 const renderEventDetail = (event) => { const leadMedia = getDisplayMediaItems(event)[0] || normalizeGalleryItem({ src: event.image }, 0); return `<article class="detail-panel${isAdultEvent(event) ? " adult-event-theme" : ""}" id="${event.id}">${renderGalleryMedia(leadMedia, getGalleryDisplayTitle(event, leadMedia, 0)).replace('class="event-gallery-media"', 'class="detail-image"')}<div class="detail-body"><p class="event-date">${event.dateLabel}</p><h3>${event.title}</h3><p class="event-description">${event.description}</p><div class="event-meta"><span>${event.category}</span><span>${event.location}</span><span>${event.audience}</span></div><div class="detail-note">${event.detailNote}</div></div></article>`; };
@@ -1654,7 +1672,7 @@ function renderFriendlyAccessMessage(message = "Looks like you are flailing a bi
 }
 function renderAccessDenied() { renderFriendlyAccessMessage(); }
 function renderNotFound() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Prototype route</p><h2>Page not found</h2><p class="intro compact">Try the Home, Scribe Attendance, or Org Chart routes from the navigation above.</p></div></section>`; }
-function renderRoute() { renderIdentityControls(); const hash = window.location.hash || "#/"; if (!currentActor?.authenticated && (hash.startsWith("#/scribe/") || hash.startsWith("#/scouts") || hash.startsWith("#/patrols") || hash.startsWith("#/adults") || hash.startsWith("#/org-chart") || hash.startsWith("#/holidays"))) { renderAccessDenied(); applyTitleAttributes(); return; } if (hash === "#/" || hash === "") { if (modeSelect.value === "public") { renderPublic(); applyTitleAttributes(); return; } renderDashboard(modeSelect.value); applyTitleAttributes(); return; } if (hash === "#/resources") { renderResourcesRoute(); applyTitleAttributes(); return; } if (hash === "#/events") { if (canSeeOrgChart()) { renderEventsList(); applyTitleAttributes(); return; } renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/calendar") { renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/list") { renderEventsList(); applyTitleAttributes(); return; } if (hash.startsWith("#/events/")) { renderEventRoute(hash.replace("#/events/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance") { renderScribeIndex(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/event/troop-meeting-stem") { renderScribeEvent(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/print") { renderScribePrint(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/upload") { renderScribeUpload(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/history") { renderScribeHistory(); applyTitleAttributes(); return; } if (hash.startsWith("#/scribe/attendance/history/item/")) { renderScribeHistoryItem(hash.replace("#/scribe/attendance/history/item/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/reports/monthly") { renderScribeMonthly(); applyTitleAttributes(); return; } if (hash === "#/scouts") { renderScoutsRoute(); applyTitleAttributes(); return; } if (hash === "#/patrols") { renderPatrolsRoute(); applyTitleAttributes(); return; } if (hash === "#/holdays") { window.location.hash = "#/holidays"; return; } if (hash === "#/holidays") { renderHolidaysRoute(); applyTitleAttributes(); return; } if (hash.startsWith("#/holidays/")) { renderHolidayEditor(hash.replace("#/holidays/", "")); applyTitleAttributes(); return; } if (hash === "#/adult") { window.location.hash = "#/adults"; return; } if (hash === "#/adults") { renderAdultsRoute(); applyTitleAttributes(); return; } if (hash === "#/org-chart") { renderOrgChart(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-scouts") { renderScoutOrgChartEditor(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-adults") { renderAdultOrgChartEditor(); applyTitleAttributes(); return; } if (hash.startsWith("#/adults/")) { renderAdultRecordEditor(hash.replace("#/adults/", "")); applyTitleAttributes(); return; } if (hash.startsWith("#/scouts/")) { renderScoutRecordEditor(hash.replace("#/scouts/", "")); applyTitleAttributes(); return; } renderNotFound(); applyTitleAttributes(); }
+function renderRoute() { renderIdentityControls(); if (appLoading) { renderLoadingRoute(); applyTitleAttributes(); return; } const hash = window.location.hash || "#/"; if (!currentActor?.authenticated && (hash.startsWith("#/scribe/") || hash.startsWith("#/scouts") || hash.startsWith("#/patrols") || hash.startsWith("#/adults") || hash.startsWith("#/org-chart") || hash.startsWith("#/holidays"))) { renderAccessDenied(); applyTitleAttributes(); return; } if (hash === "#/" || hash === "") { if (modeSelect.value === "public") { renderPublic(); applyTitleAttributes(); return; } renderDashboard(modeSelect.value); applyTitleAttributes(); return; } if (hash === "#/resources") { renderResourcesRoute(); applyTitleAttributes(); return; } if (hash === "#/events") { if (canSeeOrgChart()) { renderEventsList(); applyTitleAttributes(); return; } renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/calendar") { renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/list") { renderEventsList(); applyTitleAttributes(); return; } if (hash.startsWith("#/events/")) { renderEventRoute(hash.replace("#/events/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance") { renderScribeIndex(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/event/troop-meeting-stem") { renderScribeEvent(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/print") { renderScribePrint(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/upload") { renderScribeUpload(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/history") { renderScribeHistory(); applyTitleAttributes(); return; } if (hash.startsWith("#/scribe/attendance/history/item/")) { renderScribeHistoryItem(hash.replace("#/scribe/attendance/history/item/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/reports/monthly") { renderScribeMonthly(); applyTitleAttributes(); return; } if (hash === "#/scouts") { renderScoutsRoute(); applyTitleAttributes(); return; } if (hash === "#/patrols") { renderPatrolsRoute(); applyTitleAttributes(); return; } if (hash === "#/holdays") { window.location.hash = "#/holidays"; return; } if (hash === "#/holidays") { renderHolidaysRoute(); applyTitleAttributes(); return; } if (hash.startsWith("#/holidays/")) { renderHolidayEditor(hash.replace("#/holidays/", "")); applyTitleAttributes(); return; } if (hash === "#/adult") { window.location.hash = "#/adults"; return; } if (hash === "#/adults") { renderAdultsRoute(); applyTitleAttributes(); return; } if (hash === "#/org-chart") { renderOrgChart(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-scouts") { renderScoutOrgChartEditor(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-adults") { renderAdultOrgChartEditor(); applyTitleAttributes(); return; } if (hash.startsWith("#/adults/")) { renderAdultRecordEditor(hash.replace("#/adults/", "")); applyTitleAttributes(); return; } if (hash.startsWith("#/scouts/")) { renderScoutRecordEditor(hash.replace("#/scouts/", "")); applyTitleAttributes(); return; } renderNotFound(); applyTitleAttributes(); }
 function applyScoutFilter(input) {
   const section = input.closest(".section");
   const scope = section?.querySelector("[data-scout-filter-scope]");
@@ -1687,25 +1705,46 @@ document.addEventListener("submit", async (event) => {
   const form = event.target.closest("[data-login-form]");
   if (!form) return;
   event.preventDefault();
+  if (authBusy) return;
   const email = form.querySelector("[data-login-email]")?.value.trim();
   const password = form.querySelector("[data-login-password]")?.value || "";
   const otp = form.querySelector("[data-login-otp]")?.value.trim();
   form.querySelector("[data-login-error]")?.remove();
-  const response = await fetch("/auth/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ credentials: { email }, password, otp }),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    form.insertAdjacentHTML("beforeend", `<span class="nav-note" data-login-error>${payload.error || "Login failed"}</span>`);
-    return;
+  const submitButton = form.querySelector('button[type="submit"]');
+  const previousButtonText = submitButton?.textContent || "Log In";
+  authBusy = true;
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = "Loading";
   }
-  sessionToken = payload.session?.token || "";
-  window.localStorage.setItem("troop883-auth-token", sessionToken);
-  currentActor = { authenticated: true, account: payload.account, ...payload.access };
-  await loadData();
-  renderRoute();
+  form.querySelectorAll("input, [data-toggle-password]").forEach((control) => { control.disabled = true; });
+  try {
+    const response = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credentials: { email }, password, otp }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      form.insertAdjacentHTML("beforeend", `<span class="nav-note" data-login-error>${payload.error || "Login failed"}</span>`);
+      return;
+    }
+    sessionToken = payload.session?.token || "";
+    window.localStorage.setItem("troop883-auth-token", sessionToken);
+    currentActor = { authenticated: true, account: payload.account, ...payload.access };
+    setAppLoading("Loading account");
+    await loadData();
+    clearAppLoading();
+    renderRoute();
+  } finally {
+    authBusy = false;
+    if (appLoading) clearAppLoading();
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = previousButtonText;
+    }
+    form.querySelectorAll("input, [data-toggle-password]").forEach((control) => { control.disabled = false; });
+  }
 });
 function shouldUseDefaultButtonClickFeedback(button) {
   if (!button || button.disabled || button.classList.contains("is-clicked")) return false;
@@ -1737,7 +1776,12 @@ document.addEventListener("click", async (event) => {
   sessionToken = "";
   currentActor = null;
   window.localStorage.removeItem("troop883-auth-token");
-  await loadData();
+  setAppLoading("Loading public page");
+  try {
+    await loadData();
+  } finally {
+    clearAppLoading();
+  }
   window.location.hash = "#/";
   renderRoute();
 });
@@ -1777,7 +1821,12 @@ document.addEventListener("click", async (event) => {
       setSelectedCalendarDate(calendarEventButton.dataset.calendarDate);
       setSelectedEventMonth(calendarEventButton.dataset.calendarDate.slice(0, 7));
     }
-    await hydratePublicCalendarEventMedia(calendarEventButton.dataset.calendarEvent);
+    setAppLoading("Loading event");
+    try {
+      await hydratePublicCalendarEventMedia(calendarEventButton.dataset.calendarEvent);
+    } finally {
+      clearAppLoading();
+    }
     requestSelectedCalendarEventScroll();
     renderRoute();
     return;
@@ -1796,16 +1845,23 @@ document.addEventListener("click", async (event) => {
   }
 });
 window.addEventListener("hashchange", async () => {
-  if ((window.location.hash || "").startsWith("#/events/calendar")) {
-    try {
-      await loadCalendarMonthEvents(getSelectedEventMonth());
-    } catch (error) {
-      console.warn(error);
+  const hash = window.location.hash || "#/";
+  const needsAsyncRouteLoad = hash.startsWith("#/events/calendar") || Boolean(getEventDetailRouteId());
+  if (needsAsyncRouteLoad) setAppLoading("Loading page");
+  try {
+    if (hash.startsWith("#/events/calendar")) {
+      try {
+        await loadCalendarMonthEvents(getSelectedEventMonth());
+      } catch (error) {
+        console.warn(error);
+      }
     }
-  }
-  const detailEventId = getEventDetailRouteId();
-  if (detailEventId) {
-    await hydratePublicCalendarEventMedia(detailEventId);
+    const detailEventId = getEventDetailRouteId();
+    if (detailEventId) {
+      await hydratePublicCalendarEventMedia(detailEventId);
+    }
+  } finally {
+    if (needsAsyncRouteLoad) clearAppLoading();
   }
   renderRoute();
   hydrateLandingEventWindowMedia().catch(() => {});
@@ -2537,9 +2593,11 @@ document.addEventListener("change", async (event) => {
   const nextDateKey = selectedDate.startsWith(monthKey) ? selectedDate : `${monthKey}-01`;
   await openCalendarMonth(monthKey, nextDateKey);
 });
+setAppLoading("Loading page");
 loadData()
   .then(() => {
     rebuildDerivedData();
+    clearAppLoading();
     renderRoute();
     hydrateLandingEventWindowMedia().catch(() => {});
   })
@@ -2548,8 +2606,10 @@ loadData()
     if (fallbackEvents.length) {
       loadEvents(fallbackEvents);
       rebuildDerivedData();
+      clearAppLoading();
       renderRoute();
       return;
     }
+    clearAppLoading();
     renderFriendlyAccessMessage("Looks like you are flailing a bit. We could not open the requested troop data with this account. Return home and try a public page, or sign in with an account that has the right role.");
   });

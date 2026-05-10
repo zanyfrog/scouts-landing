@@ -65,6 +65,9 @@ textarea { min-height: 120px; resize: vertical; }
 .button.is-clicked::after { content: "Clicked"; margin-left: 8px; font-size: 0.78rem; font-weight: 800; }
 .hero, .dashboard-banner { display: grid; gap: 24px; margin-top: 16px; padding: 22px; border-radius: var(--radius-lg); border: 1px solid var(--line); background: linear-gradient(145deg, rgba(255, 251, 244, 0.84), rgba(239, 226, 203, 0.7)); box-shadow: var(--shadow); }
 .hero { grid-template-columns: 1.25fr 0.95fr; align-items: center; }
+.loading-route { grid-template-columns: 1fr auto; align-items: center; min-height: 220px; }
+.loading-spinner { width: 54px; height: 54px; border-radius: 50%; border: 5px solid rgba(50, 82, 61, 0.16); border-top-color: var(--forest); animation: loading-spin 0.85s linear infinite; }
+@keyframes loading-spin { to { transform: rotate(360deg); } }
 .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
 .hero-card, .status-chip { padding: 18px; border-radius: var(--radius-md); background: linear-gradient(180deg, rgba(44, 73, 54, 0.96), rgba(33, 55, 42, 0.96)); color: #f8f2e7; }
 .hero-card-label, .hero-event-meta, .status-chip span, .sync-label { color: rgba(248, 242, 231, 0.72); }
