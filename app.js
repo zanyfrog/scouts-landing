@@ -81,6 +81,7 @@ let pendingCalendarEventScroll = false;
 const hydratedPublicEventIds = new Set();
 const prototypeToday = new Date();
 const saintJosephLocation = "Saint Joseph Catholic Church - Eldersburg";
+const eventRegistrationStorageKey = "troop883-event-registrations";
 function slugifyName(value) { return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, ""); }
 function defaultReportsTo(role) { if (role === "Scoutmaster") return "Committee Chair"; if (role === "Assistant Scoutmaster") return "Scoutmaster"; if (role === "Committee Chair") return "Troop Committee"; return "Committee Chair"; }
 function defaultArea(role) { return role === "Scoutmaster" || role === "Assistant Scoutmaster" ? "Program" : "Committee"; }
@@ -147,6 +148,7 @@ function normalizeActivity(record, index = 0) { return { id: record.id || `activ
 function createEmptyReactions() { return { like: [], love: [], laugh: [], disappointed: [] }; }
 function normalizeImageReactions(record) { const reactions = createEmptyReactions(); imageReactionTypes.forEach((reaction) => { reactions[reaction] = Array.isArray(record?.[reaction]) ? record[reaction].filter(Boolean) : []; }); return reactions; }
 function normalizeImageComment(comment, index = 0) { return { id: comment?.id || `comment-${index + 1}`, authorId: comment?.authorId || "", authorName: comment?.authorName || "Unknown user", createdAt: comment?.createdAt || new Date().toISOString(), text: comment?.text || "" }; }
+function normalizeEventRegistration(record = {}) { const personType = String(record.personType || record.type || "").trim() || "member"; const personId = String(record.personId || record.id || "").trim(); return { personType, personId, name: String(record.name || "").trim(), registeredBy: String(record.registeredBy || "").trim(), registeredAt: String(record.registeredAt || "").trim() }; }
 function detectMediaType(value, mimeType = "") { if (String(mimeType).startsWith("video/")) return "video"; if (String(mimeType).startsWith("image/")) return "image"; if (/^data:video\//i.test(String(value || ""))) return "video"; if (/^data:image\//i.test(String(value || ""))) return "image"; if (/\.(mp4|webm|ogg|mov)(\?|#|$)/i.test(String(value || ""))) return "video"; return "image"; }
 function normalizeGalleryItem(item, index = 0) {
   if (typeof item === "string") {
@@ -169,9 +171,9 @@ function normalizeGalleryItem(item, index = 0) {
 }
 function getGalleryItemDateTime(item, index = 0) { const timestamp = Date.parse(item?.imageDateTime || item?.capturedAt || item?.dateTaken || item?.lastModified || item?.uploadedAt || item?.createdAt || item?.datetime || ""); return Number.isFinite(timestamp) ? timestamp : index; }
 function sortGalleryByDateTime(items) { return (Array.isArray(items) ? items : []).map((item, index) => ({ item: normalizeGalleryItem(item, index), index })).filter(({ item }) => item.src).sort((a, b) => getGalleryItemDateTime(a.item, a.index) - getGalleryItemDateTime(b.item, b.index) || a.index - b.index).map(({ item }, index) => ({ ...item, id: item.id || `image-${index + 1}` })); }
-function normalizeEvent(record) { const rawGallery = Array.isArray(record.gallery) ? record.gallery.filter(Boolean) : String(record.gallery || "").split(/\r?\n/).map((image) => image.trim()).filter(Boolean); const image = record.image || (typeof rawGallery[0] === "string" ? rawGallery[0] : rawGallery[0]?.src) || ""; const homeBase = normalizeEventLocation(record.homeBase || record.location || ""); const activities = Array.isArray(record.activities) ? record.activities.map((activity, index) => normalizeActivity(activity, index)) : []; const gallery = sortGalleryByDateTime(rawGallery.map((item, index) => normalizeGalleryItem(item, index))); const repeatEnabled = typeof record.repeatEnabled === "boolean" ? record.repeatEnabled : String(record.repeatEnabled).toLowerCase() === "true"; const repeatInterval = Math.max(1, Number(record.repeatInterval) || 1); return { id: record.id, title: record.title || "Untitled event", category: record.category || "Event", startDate: record.startDate || "", endDate: record.endDate || "", dateLabel: record.dateLabel || "", homeBase, location: homeBase, audience: record.audience || "", description: record.description || "", detailNote: record.detailNote || "", activities, image, gallery: gallery.length ? gallery : (image ? [normalizeGalleryItem({ src: image }, 0)] : []), upcoming: typeof record.upcoming === "boolean" ? record.upcoming : String(record.upcoming).toLowerCase() === "true", repeatEnabled, repeatFrequency: record.repeatFrequency || "weekly", repeatInterval, repeatUntil: record.repeatUntil || "", repeatMonthlyPattern: record.repeatMonthlyPattern || "date", repeatMonthlyOrdinal: record.repeatMonthlyOrdinal || "third", repeatMonthlyWeekday: record.repeatMonthlyWeekday || "monday" }; }
-function getGalleryImagesFromEditor() { return sortGalleryByDateTime([...document.querySelectorAll("[data-gallery-item]")].map((item, index) => { const currentEvent = getEventById((window.location.hash || "").replace("#/events/", "")); const existing = currentEvent?.gallery?.find((galleryItem) => galleryItem.id === item.dataset.galleryItem) || normalizeGalleryItem({ src: item.dataset.gallerySrc }, index); const nextDescription = item.querySelector("[data-gallery-description]")?.value.trim() || ""; const nextTitle = nextDescription || item.querySelector("[data-gallery-title]")?.value.trim() || ""; return { ...existing, src: item.dataset.gallerySrc || existing.src, title: nextTitle, description: nextDescription }; }).filter((item) => item.src)); }
-function setGalleryImagesInEditor(images) { const galleryItems = sortGalleryByDateTime(images); const eventId = (window.location.hash || "").replace("#/events/", ""); const currentEvent = getEventById(eventId); if (currentEvent) { currentEvent.gallery = galleryItems; if (!currentEvent.image) currentEvent.image = galleryItems[0]?.src || ""; } }
+function normalizeEvent(record) { const rawGallery = Array.isArray(record.gallery) ? record.gallery.filter(Boolean) : String(record.gallery || "").split(/\r?\n/).map((image) => image.trim()).filter(Boolean); const image = record.image || (typeof rawGallery[0] === "string" ? rawGallery[0] : rawGallery[0]?.src) || ""; const homeBase = normalizeEventLocation(record.homeBase || record.location || ""); const activities = Array.isArray(record.activities) ? record.activities.map((activity, index) => normalizeActivity(activity, index)) : []; const gallery = sortGalleryByDateTime(rawGallery.map((item, index) => normalizeGalleryItem(item, index))); const repeatEnabled = typeof record.repeatEnabled === "boolean" ? record.repeatEnabled : String(record.repeatEnabled).toLowerCase() === "true"; const repeatInterval = Math.max(1, Number(record.repeatInterval) || 1); const registrations = Array.isArray(record.registrations) ? record.registrations.map(normalizeEventRegistration).filter((registration) => registration.personId) : []; return { id: record.id, title: record.title || "Untitled event", category: record.category || "Event", startDate: record.startDate || "", endDate: record.endDate || "", dateLabel: record.dateLabel || "", homeBase, location: homeBase, audience: record.audience || "", description: record.description || "", detailNote: record.detailNote || "", activities, image, gallery: gallery.length ? gallery : (image ? [normalizeGalleryItem({ src: image }, 0)] : []), registrations, upcoming: typeof record.upcoming === "boolean" ? record.upcoming : String(record.upcoming).toLowerCase() === "true", repeatEnabled, repeatFrequency: record.repeatFrequency || "weekly", repeatInterval, repeatUntil: record.repeatUntil || "", repeatMonthlyPattern: record.repeatMonthlyPattern || "date", repeatMonthlyOrdinal: record.repeatMonthlyOrdinal || "third", repeatMonthlyWeekday: record.repeatMonthlyWeekday || "monday" }; }
+function getGalleryImagesFromEditor() { return sortGalleryByDateTime([...document.querySelectorAll("[data-gallery-item]")].map((item, index) => { const currentEvent = getEventById(getEventDetailRouteId()); const existing = currentEvent?.gallery?.find((galleryItem) => galleryItem.id === item.dataset.galleryItem) || normalizeGalleryItem({ src: item.dataset.gallerySrc }, index); const nextDescription = item.querySelector("[data-gallery-description]")?.value.trim() || ""; const nextTitle = nextDescription || item.querySelector("[data-gallery-title]")?.value.trim() || ""; return { ...existing, src: item.dataset.gallerySrc || existing.src, title: nextTitle, description: nextDescription }; }).filter((item) => item.src)); }
+function setGalleryImagesInEditor(images) { const galleryItems = sortGalleryByDateTime(images); const eventId = getEventDetailRouteId(); const currentEvent = getEventById(eventId); if (currentEvent) { currentEvent.gallery = galleryItems; if (!currentEvent.image) currentEvent.image = galleryItems[0]?.src || ""; } }
 function parseExifDateTime(value) {
   const match = String(value || "").trim().match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
   if (!match) return "";
@@ -239,6 +241,29 @@ async function readImageDateTime(file) {
 function readFileAsDataUrl(file) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve({ src: String(reader.result || ""), mediaType: detectMediaType(reader.result, file.type) }); reader.onerror = () => reject(reader.error || new Error("Could not read file")); reader.readAsDataURL(file); }); }
 function storePatrolsSnapshot() {}
 function storeEventsSnapshot() { return true; }
+function loadLocalEventRegistrations() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(eventRegistrationStorageKey) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+function saveLocalEventRegistrations() {
+  const payload = Object.fromEntries(events.map((event) => [event.id, (event.registrations || []).map(normalizeEventRegistration).filter((registration) => registration.personId)]));
+  try {
+    window.localStorage.setItem(eventRegistrationStorageKey, JSON.stringify(payload));
+  } catch (error) {}
+}
+function mergeLocalEventRegistrationsIntoEvents() {
+  const stored = loadLocalEventRegistrations();
+  events = events.map((event) => {
+    const localRegistrations = Array.isArray(stored[event.id]) ? stored[event.id].map(normalizeEventRegistration).filter((registration) => registration.personId) : [];
+    if (!localRegistrations.length) return event;
+    const registrationsByKey = new Map([...(event.registrations || []), ...localRegistrations].map((registration) => [`${registration.personType}:${registration.personId}`, registration]));
+    return { ...event, registrations: [...registrationsByKey.values()] };
+  });
+}
 async function saveEvents() {
   events = events.map((event) => {
     const gallery = sortGalleryByDateTime(event.gallery || []);
@@ -356,6 +381,7 @@ async function flushEventAutosave(eventId) {
 }
 function loadEvents(initialEvents = []) {
   events = Array.isArray(initialEvents) ? initialEvents.map(normalizeEvent) : [];
+  mergeLocalEventRegistrationsIntoEvents();
   storeEventsSnapshot();
 }
 function hasPrimaryEventMedia(event) {
@@ -378,6 +404,7 @@ function mergeLoadedEvents(incomingEvents = []) {
     nextEventsById.set(String(event.id), event);
   });
   events = [...nextEventsById.values()];
+  mergeLocalEventRegistrationsIntoEvents();
   storeEventsSnapshot();
 }
 function getEventById(eventId) { return events.find((event) => event.id === eventId); }
@@ -419,6 +446,14 @@ function activityDisplayDateLabel(activity, event) { return shouldHidePublicFutu
 function activityDisplayLocationLabel(activity, event) { return shouldHidePublicFutureEventInfo(event) ? publicFutureLocationLabel : (activity.location || "Location TBD"); }
 function displayRepeatSummary(event) { return shouldHidePublicFutureEventInfo(event) ? "" : formatRepeatSummary(event); }
 function shouldShowPublicEventMap(event) { return !shouldHidePublicFutureEventInfo(event) && Boolean(event.homeBase || event.location); }
+function eventOverlapsDateRange(event, startDate, endDate) {
+  const rangeStart = parseDateKey(startDate);
+  const rangeEnd = parseDateKey(endDate);
+  const eventStart = parseEventStartDate(event);
+  const eventEnd = parseEventEndDate(event) || eventStart;
+  if (!rangeStart || !rangeEnd || !eventStart || !eventEnd) return false;
+  return startOfDay(eventStart).getTime() <= startOfDay(rangeEnd).getTime() && startOfDay(eventEnd).getTime() >= startOfDay(rangeStart).getTime();
+}
 function truncateCardActivityLabel(text, maxLength = 25) {
   const normalized = String(text || "").trim();
   if (!normalized) return "";
@@ -586,7 +621,7 @@ function formatExactEventDateTime(value) { const parsed = value ? new Date(value
 function formatEventReviewDateTimeRange(event) { const startValue = event?.startDate || ""; const endValue = event?.endDate || event?.startDate || ""; const start = startValue ? new Date(startValue) : null; const end = endValue ? new Date(endValue) : null; if (!start || Number.isNaN(start.getTime())) return "Date not set"; const dateOptions = { weekday: "short", month: "short", day: "numeric", year: "numeric" }; const timeOptions = { hour: "numeric", minute: "2-digit" }; const startHasTime = String(startValue).includes("T"); const endHasTime = String(endValue).includes("T"); const startDateText = start.toLocaleDateString("en-US", dateOptions); if (!end || Number.isNaN(end.getTime())) return startHasTime ? `${startDateText}, ${start.toLocaleTimeString("en-US", timeOptions)}` : startDateText; const sameDay = start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth() && start.getDate() === end.getDate(); if (sameDay) { if (startHasTime || endHasTime) return `${startDateText}, ${start.toLocaleTimeString("en-US", timeOptions)} - ${end.toLocaleTimeString("en-US", timeOptions)}`; return startDateText; } return `${formatExactEventDateTime(startValue)} - ${formatExactEventDateTime(endValue)}`; }
 function nextActivityId(event) { const used = new Set((event.activities || []).map((activity) => activity.id)); let counter = (event.activities || []).length + 1; while (used.has(`activity-${counter}`)) counter += 1; return `activity-${counter}`; }
 function renderActivitySummary(activity) { return `<article class="month-summary-card"><div class="panel-heading"><h3>${activity.description || "Activity"}</h3><p>${formatExactEventDateTime(activity.startDate)} - ${formatExactEventDateTime(activity.endDate || activity.startDate)}</p></div><div class="event-meta"><span>${activity.location || "Location TBD"}</span></div></article>`; }
-function renderCalendarExpandableEvent(event) { return `<details class="month-summary-card event-expand-card"><summary><div class="panel-heading"><h3>${event.title}</h3><p>${event.dateLabel} • ${event.homeBase || "Home base TBD"}</p></div></summary><div class="detail-stack"><p class="event-description">${event.description}</p><div class="event-meta"><span>${event.category}</span><span>${event.audience}</span>${event.repeatEnabled ? `<span>${formatRepeatSummary(event)}</span>` : ""}</div><ul class="detail-list"><li>Location from where all activities will start: ${event.homeBase || "Home base TBD"}</li><li>Starts: ${formatExactEventDateTime(event.startDate)}</li><li>Ends: ${formatExactEventDateTime(event.endDate || event.startDate)}</li>${event.repeatEnabled ? `<li>${formatRepeatSummary(event)}</li>` : ""}</ul>${event.activities?.length ? `<div class="detail-stack"><h4>Activities</h4>${event.activities.map(renderActivitySummary).join("")}</div>` : ""}<div class="scribe-actions"><a class="text-link" href="#/events/${event.id}">${canSeeOrgChart() ? "Open editor" : "Open event page"}</a></div></div></details>`; }
+function renderCalendarExpandableEvent(event) { return `<details class="month-summary-card event-expand-card"><summary><div class="panel-heading"><h3>${event.title}</h3><p>${event.dateLabel} • ${event.homeBase || "Home base TBD"}</p></div></summary><div class="detail-stack"><p class="event-description">${event.description}</p><div class="event-meta"><span>${event.category}</span><span>${event.audience}</span>${event.repeatEnabled ? `<span>${formatRepeatSummary(event)}</span>` : ""}</div><ul class="detail-list"><li>Location from where all activities will start: ${event.homeBase || "Home base TBD"}</li><li>Starts: ${formatExactEventDateTime(event.startDate)}</li><li>Ends: ${formatExactEventDateTime(event.endDate || event.startDate)}</li>${event.repeatEnabled ? `<li>${formatRepeatSummary(event)}</li>` : ""}</ul>${event.activities?.length ? `<div class="detail-stack"><h4>Activities</h4>${event.activities.map(renderActivitySummary).join("")}</div>` : ""}<div class="scribe-actions"><a class="text-link" href="#/events/${event.id}">Open event page</a></div></div></details>`; }
 function getEventMonthKey(event) { const date = parseEventStartDate(event); if (!date) return ""; return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`; }
 function formatMonthLabel(monthKey) { const [year, month] = monthKey.split("-").map(Number); return new Date(year, month - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" }); }
 function getEventMonths() {
@@ -623,6 +658,38 @@ function setSelectedEventMonth(monthKey) { if (monthKey) window.localStorage.set
 function getTodayDateKey() { return `${prototypeToday.getFullYear()}-${String(prototypeToday.getMonth() + 1).padStart(2, "0")}-${String(prototypeToday.getDate()).padStart(2, "0")}`; }
 function formatDateKey(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
 function parseDateKey(dateKey) { const [year, month, day] = String(dateKey || "").split("-").map(Number); if (!year || !month || !day) return null; return new Date(year, month - 1, day); }
+function getCurrentMonthRange() {
+  const start = new Date(prototypeToday.getFullYear(), prototypeToday.getMonth(), 1);
+  const end = new Date(prototypeToday.getFullYear(), prototypeToday.getMonth() + 1, 0);
+  return { startDate: formatDateKey(start), endDate: formatDateKey(end) };
+}
+function normalizeDateRange(startDate, endDate) {
+  const currentMonth = getCurrentMonthRange();
+  const start = parseDateKey(startDate) || parseDateKey(currentMonth.startDate);
+  const end = parseDateKey(endDate) || parseDateKey(currentMonth.endDate);
+  if (start && end && start.getTime() > end.getTime()) {
+    return { startDate: formatDateKey(end), endDate: formatDateKey(start) };
+  }
+  return { startDate: formatDateKey(start), endDate: formatDateKey(end) };
+}
+function getHashSearchParams(routePrefix) {
+  const hash = window.location.hash || "";
+  const query = hash.startsWith(routePrefix) ? hash.slice(routePrefix.length) : "";
+  return new URLSearchParams(query.startsWith("?") ? query.slice(1) : query);
+}
+function getReservationRouteRange() {
+  const params = getHashSearchParams("#/reservations");
+  return normalizeDateRange(params.get("startDate"), params.get("endDate"));
+}
+function reservationRouteUrl(startDate, endDate) {
+  const range = normalizeDateRange(startDate, endDate);
+  const params = new URLSearchParams(range);
+  return `#/reservations?${params.toString()}`;
+}
+function reservationRouteHasExplicitRange() {
+  const params = getHashSearchParams("#/reservations");
+  return Boolean(params.get("startDate") && params.get("endDate"));
+}
 function getMonthKeyForDate(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`; }
 function getSelectedCalendarDate() { return window.localStorage.getItem("troop883-selected-date") || getTodayDateKey(); }
 function setSelectedCalendarDate(dateKey) { if (dateKey) window.localStorage.setItem("troop883-selected-date", dateKey); }
@@ -659,9 +726,19 @@ async function hydrateLandingEventWindowMedia() {
   renderRoute();
 }
 function getEventDetailRouteId() {
+  return getEventRouteParts().id;
+}
+function getEventRouteParts() {
   const hash = window.location.hash || "";
-  if (!hash.startsWith("#/events/") || hash === "#/events/calendar" || hash === "#/events/list") return "";
-  return hash.replace("#/events/", "");
+  if (!hash.startsWith("#/events/") || hash === "#/events/calendar" || hash === "#/events/list") return { id: "", edit: false };
+  const rawRoute = hash.replace("#/events/", "");
+  const [pathPart, queryPart = ""] = rawRoute.split("?");
+  const edit = pathPart.endsWith("/edit") || new URLSearchParams(queryPart).get("edit") === "true";
+  const id = pathPart.replace(/\/edit$/, "");
+  return { id, edit };
+}
+function isEventEditRoute() {
+  return getEventRouteParts().edit;
 }
 function scrollSelectedCalendarEventIntoView() {
   const scrollToShowcase = () => {
@@ -820,7 +897,7 @@ function renderCalendarEventShowcase(event) {
   const locationIcon = `<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M12 2a7 7 0 0 1 7 7c0 4.95-5.06 10.7-6.34 12.08a.9.9 0 0 1-1.32 0C10.06 19.7 5 13.95 5 9a7 7 0 0 1 7-7Zm0 9.5A2.5 2.5 0 1 0 12 6a2.5 2.5 0 0 0 0 5.5Z" fill="currentColor"/></svg>`;
   const calendarIcon = `<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1a3 3 0 0 1 3 3v11a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V7a3 3 0 0 1 3-3h1V3a1 1 0 0 1 1-1Zm13 8H4v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8ZM5 6a1 1 0 0 0-1 1v1h16V7a1 1 0 0 0-1-1H5Z" fill="currentColor"/></svg>`;
   const activitiesMarkup = activities.length ? `<div class="calendar-event-sections single"><section class="panel"><div class="panel-heading"><h3>Activities</h3><p>${activities.length} planned item${activities.length === 1 ? "" : "s"}</p></div><div class="detail-stack">${activities.map((activity) => `<article class="month-summary-card"><div class="panel-heading"><h3>${activity.description || "Activity"}</h3><p>${formatEventReviewDateTimeRange(activity)}</p></div><div class="event-meta"><span>${activity.location || "Location TBD"}</span></div></article>`).join("")}</div></section></div>` : "";
-  return `<article class="calendar-event-showcase${isAdultEvent(event) ? " adult-event-theme" : ""}" data-calendar-event-showcase><div class="calendar-event-hero"><div class="calendar-event-image-wrap">${leadMediaMarkup}</div><div class="calendar-event-copy"><p class="eyebrow">Selected event</p><div class="calendar-event-title-row"><h3>${event.title}</h3><div class="event-meta compact"><span>${event.category || "Event"}</span><span>${event.audience || "Audience TBD"}</span>${event.repeatEnabled ? `<span>${formatRepeatSummary(event)}</span>` : ""}</div></div><p class="event-description">${event.description || "No event description yet."}</p><div class="calendar-event-review-meta"><div class="calendar-event-icon-row"><span class="calendar-event-review-icon">${locationIcon}</span><strong>${event.homeBase || "Home base TBD"}</strong></div><div class="calendar-event-icon-row"><span class="calendar-event-review-icon">${calendarIcon}</span><strong>${formatEventReviewDateTimeRange(event)}</strong></div></div><div class="detail-note">${event.detailNote || "No additional event note yet."}</div><div class="scribe-actions">${canSeeOrgChart() ? `<a class="button secondary" href="#/events/${event.id}">Edit event</a>` : `<a class="button secondary" href="#/events/${event.id}">Open full event page</a>`}</div></div></div>${activitiesMarkup}</article>`;
+  return `<article class="calendar-event-showcase${isAdultEvent(event) ? " adult-event-theme" : ""}" data-calendar-event-showcase><div class="calendar-event-hero"><div class="calendar-event-image-wrap">${leadMediaMarkup}</div><div class="calendar-event-copy"><p class="eyebrow">Selected event</p><div class="calendar-event-title-row"><h3>${event.title}</h3><div class="event-meta compact"><span>${event.category || "Event"}</span><span>${event.audience || "Audience TBD"}</span>${event.repeatEnabled ? `<span>${formatRepeatSummary(event)}</span>` : ""}</div></div><p class="event-description">${event.description || "No event description yet."}</p><div class="calendar-event-review-meta"><div class="calendar-event-icon-row"><span class="calendar-event-review-icon">${locationIcon}</span><strong>${event.homeBase || "Home base TBD"}</strong></div><div class="calendar-event-icon-row"><span class="calendar-event-review-icon">${calendarIcon}</span><strong>${formatEventReviewDateTimeRange(event)}</strong></div></div><div class="detail-note">${event.detailNote || "No additional event note yet."}</div><div class="scribe-actions"><a class="button secondary" href="#/events/${event.id}">Open full event page</a>${canSeeOrgChart() ? `<a class="button secondary" href="#/events/${event.id}?edit=true">Edit event</a>` : ""}</div></div></div>${activitiesMarkup}</article>`;
 }
 function renderImageReactionButtons(image) {
   const viewer = getCurrentViewerIdentity();
@@ -1014,6 +1091,87 @@ function getCurrentViewerIdentity() {
     name: currentActor.person?.name || currentActor.account?.email || "Member",
     role: getCurrentMode(),
   };
+}
+function actorCandidateIds() { return [currentActor?.person?.externalId, currentActor?.person?.id, currentActor?.account?.personId, currentActor?.account?.id].filter(Boolean).map(String); }
+function actorCandidateEmail() { return String(currentActor?.person?.email || currentActor?.account?.email || "").trim().toLowerCase(); }
+function actorCandidateName() { return String(currentActor?.person?.name || "").trim().toLowerCase(); }
+function recordMatchesCurrentActor(record) {
+  if (!record || !currentActor?.authenticated) return false;
+  const ids = new Set(actorCandidateIds());
+  const recordIds = [record.id, record.externalId, record.personId, record.adultId, record.scoutId].filter(Boolean).map(String);
+  if (recordIds.some((id) => ids.has(id))) return true;
+  const email = actorCandidateEmail();
+  if (email && String(record.email || "").trim().toLowerCase() === email) return true;
+  const name = actorCandidateName();
+  return Boolean(name && String(record.name || "").trim().toLowerCase() === name);
+}
+function getCurrentAdultRecord() {
+  return adults.find(recordMatchesCurrentActor) || (hasRole("parent") && adults.length === 1 ? adults[0] : null);
+}
+function getCurrentScoutRecord() {
+  return scouts.find(recordMatchesCurrentActor) || (hasRole("scout") && scouts.length === 1 ? scouts[0] : null);
+}
+function eventRegistrationKey(person) { return `${person.personType}:${person.personId}`; }
+function personFromScout(scout) { return scout ? { personType: "scout", personId: scout.id, name: scout.name, detail: scout.patrol ? `${scout.patrol} Patrol` : "Scout" } : null; }
+function personFromAdult(adult, detail = "") { return adult ? { personType: "adult", personId: adult.id, name: adult.name, detail: detail || adult.relationship || "Adult" } : null; }
+function isPersonRegisteredForEvent(event, person) {
+  if (!event || !person) return false;
+  const key = eventRegistrationKey(person);
+  return (event.registrations || []).some((registration) => eventRegistrationKey(registration) === key);
+}
+function registerPersonForEvent(event, person) {
+  if (!event || !person || isPersonRegisteredForEvent(event, person)) return false;
+  const viewer = getCurrentViewerIdentity();
+  event.registrations = [...(event.registrations || []), normalizeEventRegistration({ ...person, registeredBy: viewer?.id || "", registeredAt: new Date().toISOString() })];
+  return true;
+}
+async function saveEventRegistrations() {
+  saveLocalEventRegistrations();
+  try {
+    const response = await fetch("/api/events", { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ events: events.map((event) => ({ ...event })) }) });
+    return response.ok;
+  } catch (error) {
+    return false;
+  }
+}
+function getParentLinkedScouts() {
+  const currentAdult = getCurrentAdultRecord();
+  if (currentAdult) return getScoutsForAdult(currentAdult);
+  const actorScoutIds = new Set((currentActor?.relationships || []).map((relationship) => relationship.scoutPersonId || relationship.scoutId).filter(Boolean));
+  return actorScoutIds.size ? scouts.filter((scout) => actorScoutIds.has(scout.id)) : getLinkedScoutsForCurrentParent();
+}
+function getAssociatedAdultsForScouts(linkedScouts = []) {
+  const linkedScoutIds = new Set(linkedScouts.map((scout) => scout.id));
+  const adultIds = new Set(adultScoutRelationships.filter((relationship) => linkedScoutIds.has(relationship.scoutId) && /parent|guardian/i.test(relationship.relationship || "")).map((relationship) => relationship.adultId));
+  return adults.filter((adult) => adultIds.has(adult.id));
+}
+function getRegistrationPeopleForCurrentActor() {
+  if (!currentActor?.authenticated) return [];
+  const people = [];
+  const scout = getCurrentScoutRecord();
+  const adult = getCurrentAdultRecord();
+  if (scout) people.push(personFromScout(scout));
+  if (adult) people.push(personFromAdult(adult, "You"));
+  if (!scout && !adult) {
+    const viewer = getCurrentViewerIdentity();
+    if (viewer) people.push({ personType: "member", personId: viewer.id, name: viewer.name, detail: "You" });
+  }
+  if (hasRole("parent")) {
+    const linkedScouts = getParentLinkedScouts();
+    linkedScouts.forEach((linkedScout) => people.push(personFromScout(linkedScout)));
+    getAssociatedAdultsForScouts(linkedScouts).forEach((associatedAdult) => people.push(personFromAdult(associatedAdult, associatedAdult.id === adult?.id ? "You" : "Associated parent")));
+  }
+  return uniqueBy(people.filter(Boolean), eventRegistrationKey);
+}
+function renderRegistrationAction(event, person) {
+  const registered = isPersonRegisteredForEvent(event, person);
+  return `<button class="text-link event-registration-link${registered ? " is-registered" : ""}" type="button" data-event-register="${event.id}" data-register-person-type="${person.personType}" data-register-person-id="${person.personId}" aria-pressed="${registered ? "true" : "false"}">${registered ? "registered" : "register"}</button>`;
+}
+function renderEventRegistrationPanel(event) {
+  if (!currentActor?.authenticated) return "";
+  const people = getRegistrationPeopleForCurrentActor();
+  if (!people.length) return "";
+  return `<section class="section"><article class="panel event-registration-panel"><div class="panel-heading"><h3>Registration</h3><p>Signed-in members can see whether each accessible person is registered for this event.</p></div><div class="event-registration-list">${people.map((person) => `<div class="event-registration-row"><div><strong>${person.name}</strong><span>${person.detail || person.personType}</span></div>${renderRegistrationAction(event, person)}</div>`).join("")}</div></article></section>`;
 }
 function getActiveParentAdult() { return savedParentGuardians.find((adult) => getScoutsForAdult(adult).length) || savedParentGuardians[0] || null; }
 function getLinkedScoutsForCurrentParent() {
@@ -1396,6 +1554,10 @@ function calendarEventsUrl(monthKey) {
   const params = new URLSearchParams({ ...range, page: "1", pageSize: "100" });
   return `/api/events?${params.toString()}`;
 }
+function eventsRangeUrl(startDate, endDate) {
+  const params = new URLSearchParams({ startDate, endDate, page: "1", pageSize: "100" });
+  return `/api/events?${params.toString()}`;
+}
 async function loadCalendarMonthEvents(monthKey) {
   if (!/^\d{4}-\d{2}$/.test(String(monthKey || "")) || loadedCalendarMonths.has(monthKey)) return;
   const response = await fetch(calendarEventsUrl(monthKey), { cache: "no-store", headers: authHeaders() });
@@ -1404,6 +1566,15 @@ async function loadCalendarMonthEvents(monthKey) {
   const incomingEvents = Array.isArray(payload.events) ? payload.events : Array.isArray(payload.data?.events) ? payload.data.events : [];
   mergeLoadedEvents(incomingEvents);
   loadedCalendarMonths.add(monthKey);
+  rebuildDerivedData();
+}
+async function loadReservationRangeEvents() {
+  const { startDate, endDate } = getReservationRouteRange();
+  const response = await fetch(eventsRangeUrl(startDate, endDate), { cache: "no-store", headers: authHeaders() });
+  if (!response.ok) throw new Error(`Could not load reservations for ${startDate} through ${endDate}`);
+  const payload = await response.json();
+  const incomingEvents = Array.isArray(payload.events) ? payload.events : Array.isArray(payload.data?.events) ? payload.data.events : [];
+  mergeLoadedEvents(incomingEvents);
   rebuildDerivedData();
 }
 async function openCalendarMonth(monthKey, dateKey = "") {
@@ -1479,6 +1650,13 @@ async function loadData() {
   if (detailEventId) {
     await hydratePublicCalendarEventMedia(detailEventId);
   }
+  if ((window.location.hash || "").startsWith("#/reservations") && currentActor?.authenticated) {
+    try {
+      await loadReservationRangeEvents();
+    } catch (error) {
+      console.warn(error);
+    }
+  }
 
   if (!getActiveScoutId() && roster[0]?.id) {
     setActiveScoutId(roster[0].id);
@@ -1502,12 +1680,14 @@ function renderIdentityControls() {
   if (existing) existing.remove();
   if (!headerActions) return;
   const viewer = getCurrentViewerIdentity();
+  const loginIcon = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 3a1 1 0 0 1 1 1v3a1 1 0 1 1-2 0V5H5v14h5v-2a1 1 0 1 1 2 0v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h7Zm5.7 5.3 3 3a1 1 0 0 1 0 1.4l-3 3a1 1 0 0 1-1.4-1.4L16.6 13H9a1 1 0 1 1 0-2h7.6l-1.3-1.3a1 1 0 0 1 1.4-1.4Z" fill="currentColor"/></svg>`;
+  const logoutIcon = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M13 3a1 1 0 0 1 1 1v3a1 1 0 1 1-2 0V5H5v14h7v-2a1 1 0 1 1 2 0v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h9Zm4.3 5.3a1 1 0 0 1 1.4 0l3 3a1 1 0 0 1 0 1.4l-3 3a1 1 0 0 1-1.4-1.4l1.3-1.3H11a1 1 0 1 1 0-2h7.6l-1.3-1.3a1 1 0 0 1 0-1.4Z" fill="currentColor"/></svg>`;
   const markup = viewer
-    ? `<div class="view-toggle" data-auth-session><span>${viewer.role}</span><strong>${viewer.name}</strong><button class="button secondary" type="button" data-logout>Log out</button></div>`
-    : `<details class="login-panel" data-auth-session${authBusy ? " open" : ""}><summary><span>Email login</span></summary><form class="view-toggle login-form" data-login-form><span>${authBusy ? "Loading" : "Member login"}</span><input type="email" data-login-email placeholder="email@example.com" aria-label="Email" autocomplete="username"${authBusy ? " disabled" : ""} /><div class="password-field"><input type="password" data-login-password placeholder="Password optional locally" aria-label="Password" autocomplete="current-password"${authBusy ? " disabled" : ""} /><button class="password-toggle" type="button" data-toggle-password aria-label="Show password"${authBusy ? " disabled" : ""}>Show</button></div><input type="text" data-login-otp placeholder="MFA code" aria-label="MFA code" autocomplete="one-time-code"${authBusy ? " disabled" : ""} /><button class="button primary" type="submit"${authBusy ? " disabled" : ""}>${authBusy ? "Loading" : "Log In"}</button></form></details>`;
+    ? `<div class="view-toggle auth-status" data-auth-session><span>${viewer.role}</span><strong>${viewer.name}</strong><button class="icon-button auth-icon-button" type="button" data-logout aria-label="Log out" title="Log out">${logoutIcon}</button></div>`
+    : `<details class="login-panel" data-auth-session${authBusy ? " open" : ""}><summary aria-label="Log in" title="Log in"><span class="auth-icon-button">${loginIcon}</span></summary><form class="view-toggle login-form" data-login-form><span>${authBusy ? "Loading" : "Member login"}</span><input type="email" data-login-email placeholder="email@example.com" aria-label="Email" autocomplete="username"${authBusy ? " disabled" : ""} /><div class="password-field"><input type="password" data-login-password placeholder="Password optional locally" aria-label="Password" autocomplete="current-password"${authBusy ? " disabled" : ""} /><button class="password-toggle" type="button" data-toggle-password aria-label="Show password"${authBusy ? " disabled" : ""}>Show</button></div><input type="text" data-login-otp placeholder="MFA code" aria-label="MFA code" autocomplete="one-time-code"${authBusy ? " disabled" : ""} /><button class="button primary" type="submit"${authBusy ? " disabled" : ""}>${authBusy ? "Loading" : "Log In"}</button></form></details>`;
   headerActions.insertAdjacentHTML("afterbegin", markup);
 }
-const topNav = () => { const currentHash = window.location.hash || "#/"; return `<nav class="top-nav"><a class="nav-pill${currentHash === "#/" || currentHash === "" ? " is-active" : ""}" href="#/">Home</a><a class="nav-pill${currentHash.startsWith("#/events") ? " is-active" : ""}" href="#/events">Events</a><a class="nav-pill${currentHash.startsWith("#/resources") ? " is-active" : ""}" href="#/resources">Resources</a>${currentActor?.authenticated ? `<a class="nav-pill${currentHash.startsWith("#/scribe/attendance") ? " is-active" : ""}" href="#/scribe/attendance">Scribe Attendance</a>` : ""}${canEditScouts() ? `<a class="nav-pill${currentHash === "#/scouts" || currentHash.startsWith("#/scouts/") ? " is-active" : ""}" href="#/scouts">Scouts</a><a class="nav-pill${currentHash.startsWith("#/patrols") ? " is-active" : ""}" href="#/patrols">Patrols</a>` : ""}${canSeeOrgChart() ? `<a class="nav-pill${currentHash.startsWith("#/holidays") ? " is-active" : ""}" href="#/holidays">Holidays</a><a class="nav-pill${currentHash === "#/adult" || currentHash === "#/adults" || currentHash.startsWith("#/adults/") ? " is-active" : ""}" href="#/adults">Adults</a><a class="nav-pill${currentHash.startsWith("#/org-chart") ? " is-active" : ""}" href="#/org-chart">Org Chart</a>` : ""}<span class="nav-note">${currentActor?.authenticated ? `Signed in as ${getCurrentMode()}` : "Public visitor"}</span></nav>`; };
+const topNav = () => { const currentHash = window.location.hash || "#/"; return `<nav class="top-nav"><a class="nav-pill${currentHash === "#/" || currentHash === "" ? " is-active" : ""}" href="#/">Home</a><a class="nav-pill${currentHash.startsWith("#/events") ? " is-active" : ""}" href="#/events">Events</a><a class="nav-pill${currentHash.startsWith("#/resources") ? " is-active" : ""}" href="#/resources">Resources</a>${currentActor?.authenticated ? `<a class="nav-pill${currentHash.startsWith("#/scribe/attendance") ? " is-active" : ""}" href="#/scribe/attendance">Scribe Attendance</a>` : ""}${canEditScouts() ? `<a class="nav-pill${currentHash === "#/scouts" || currentHash.startsWith("#/scouts/") ? " is-active" : ""}" href="#/scouts">Scouts</a><a class="nav-pill${currentHash.startsWith("#/patrols") ? " is-active" : ""}" href="#/patrols">Patrols</a>` : ""}${canSeeOrgChart() ? `<a class="nav-pill${currentHash.startsWith("#/reservations") ? " is-active" : ""}" href="#/reservations">Reservations</a><a class="nav-pill${currentHash.startsWith("#/holidays") ? " is-active" : ""}" href="#/holidays">Holidays</a><a class="nav-pill${currentHash === "#/adult" || currentHash === "#/adults" || currentHash.startsWith("#/adults/") ? " is-active" : ""}" href="#/adults">Adults</a><a class="nav-pill${currentHash.startsWith("#/org-chart") ? " is-active" : ""}" href="#/org-chart">Org Chart</a>` : ""}<span class="nav-note">${currentActor?.authenticated ? `Signed in as ${getCurrentMode()}` : "Public visitor"}</span></nav>`; };
 function renderLoadingRoute() {
   app.innerHTML = `${topNav()}<section class="dashboard-banner loading-route" aria-live="polite" aria-busy="true"><div><p class="eyebrow">Loading</p><h2>${appLoadingMessage || "Loading"}</h2><p class="intro compact">Please wait while the page finishes loading.</p></div><div class="loading-spinner" aria-hidden="true"></div></section>`;
 }
@@ -1557,7 +1737,25 @@ function renderPublic() {
   requestUpcomingScrollerCenter();
 }
 function renderDashboard(mode) { const config = dashboards[mode]; const scribePanel = canSeeOrgChart() ? `<article class="panel"><div class="panel-heading"><h3>Adult leader tools</h3><p>Prototype route family requested in the requirements.</p></div><ul class="detail-list"><li><a class="text-link" href="#/scribe/attendance">Scribe attendance</a></li><li><a class="text-link" href="#/holidays">Holiday blackouts</a></li><li><a class="text-link" href="#/adults">Adult records</a></li><li><a class="text-link" href="#/org-chart">Troop org chart</a></li><li><a class="text-link" href="#/org-chart/edit-scouts">Edit scout org chart</a></li><li><a class="text-link" href="#/org-chart/edit-adults">Edit adult org chart</a></li></ul></article>` : ""; const adultScoutRosterSection = canSeeOrgChart() ? renderAdultScoutRosterPanel() : ""; const parentEventGroups = mode === "parent" ? getParentDashboardEventGroups() : null; const eventPreviewSection = mode === "parent" ? `<section class="section"><div class="section-heading"><div><p class="eyebrow">Events</p><h2>Event detail preview</h2></div><p class="section-copy">${parentEventGroups?.linkedScouts?.length ? "Recent and upcoming events for the scouts linked to this parent view." : "Link a scout to this parent to show family-relevant events here."}</p></div><div class="feature-grid"><div class="feature-column"><article class="panel"><div class="panel-heading"><h3>Last three weeks</h3><p>Up to two recent events tied to your registered scouts.</p></div>${parentEventGroups?.recent?.length ? `<div class="event-grid parent-event-grid">${parentEventGroups.recent.map(({ event, registeredScouts }) => renderParentEventCard(event, registeredScouts)).join("")}</div>` : `<p class="event-description">No linked-scout events were found in the last three weeks.</p>`}</article></div><div class="feature-column"><article class="panel"><div class="panel-heading"><h3>Next eight weeks</h3><p>Upcoming events for your linked scouts, with each registered child shown on the card.</p></div>${parentEventGroups?.upcoming?.length ? `<div class="event-grid parent-event-grid">${parentEventGroups.upcoming.map(({ event, registeredScouts }) => renderParentEventCard(event, registeredScouts)).join("")}</div>` : `<p class="event-description">No linked-scout events were found in the next eight weeks.</p>`}</article></div></div></section>` : `<section class="section"><div class="section-heading"><div><p class="eyebrow">Events</p><h2>Event detail preview</h2></div><p class="section-copy">Each event includes a direct route to richer details.</p></div><div class="event-grid">${getEventDetailPreviewEvents().map(renderEventCard).join("")}</div></section>`; app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">${config.eyebrow}</p><h2>${config.title}</h2><p class="intro compact">${config.intro}</p></div><div class="status-chip"><span>Post-login destination</span><strong>Role-based dashboard</strong></div></section><section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Today</h3><p>Personalized access driven by role.</p></div><ul class="detail-list">${config.tasks.map((task) => `<li>${task}</li>`).join("")}</ul></article><article class="panel"><div class="panel-heading"><h3>Attendance decisions</h3><p>Current rules resolved from the updated requirements.</p></div><ul class="detail-list"><li>Statuses: Present, Absent</li><li>Non-regular-meeting attendance can be marked by any adult leader</li><li>Regular meeting attendance continues to support the Scribe workflow</li></ul></article><article class="panel"><div class="panel-heading"><h3>Reports</h3><p>Visibility follows access to the underlying troop data.</p></div><ul class="detail-list">${config.reports.map((report) => `<li>${report}</li>`).join("")}</ul></article><article class="panel"><div class="panel-heading"><h3>Calendar sync behavior</h3><p>Direct Google Calendar changes should flow into the site.</p></div><div class="sync-card"><div><span class="sync-label">Edited outside the site</span><strong>Reflect updated details</strong></div><div><span class="sync-label">Deleted outside the site</span><strong>Remove from the site view</strong></div></div></article>${canSeeOrgChart() ? renderLeadershipSummary() : ""}${scribePanel}</section>${eventPreviewSection}${adultScoutRosterSection}`; }
-function renderEventsList() { if (!canSeeOrgChart()) { renderAccessDenied(); return; } const sortedEvents = [...getSortedEvents()].reverse(); app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Events</p><h2>Editable event list</h2><p class="intro compact">Adult leaders can review the full imported schedule in one list and jump directly into any event editor.</p></div><div class="status-chip"><span>Route</span><strong>/events</strong></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Manage events</p><h2>All scheduled events</h2></div><div class="scribe-actions"><a class="button secondary" href="#/events/calendar">Open calendar view</a></div></div><div class="panel"><div class="panel-heading"><h3>${sortedEvents.length} events loaded</h3><p>Newest start date first. Use Edit to open the existing event detail editor for any row.</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Title</th><th>Dates</th><th>Category</th><th>Location</th><th>Audience</th><th>Edit</th></tr></thead><tbody>${sortedEvents.map((event) => `<tr><td>${event.title}</td><td>${event.dateLabel || "-"}</td><td>${event.category || "-"}</td><td>${event.location || "-"}</td><td>${event.audience || "-"}</td><td><a class="text-link" href="#/events/${event.id}">Edit</a></td></tr>`).join("")}</tbody></table></div></div></section>`; }
+function countEventReservations(event) {
+  const registrations = event.registrations || [];
+  const scoutIds = new Set(registrations.filter((registration) => registration.personType === "scout").map((registration) => registration.personId));
+  const adultIds = new Set(registrations.filter((registration) => registration.personType === "adult" || registration.personType === "member").map((registration) => registration.personId));
+  return { scouts: scoutIds.size, adults: adultIds.size };
+}
+function renderReservationsRoute() {
+  if (!canSeeOrgChart()) { renderAccessDenied(); return; }
+  const { startDate, endDate } = getReservationRouteRange();
+  if (!reservationRouteHasExplicitRange()) {
+    window.location.hash = reservationRouteUrl(startDate, endDate);
+    return;
+  }
+  const rangeEvents = getSortedEvents().filter((event) => eventOverlapsDateRange(event, startDate, endDate));
+  const totalScouts = roster.length;
+  const totalAdults = adults.length;
+  app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Reservations</p><h2>Event reservations</h2><p class="intro compact">Review reservation counts for events in the selected date range.</p></div><div class="status-chip"><span>Route</span><strong>/reservations</strong></div></section><section class="section"><div class="panel"><div class="panel-heading"><h3>Date range</h3><p>Changing either date updates the URL and reloads this page for the selected range.</p></div><div class="reservation-range-controls"><label><span>Start date</span><input type="date" data-reservation-start-date value="${startDate}" aria-label="Reservation start date" /></label><label><span>End date</span><input type="date" data-reservation-end-date value="${endDate}" aria-label="Reservation end date" /></label></div></div></section><section class="section"><div class="panel"><div class="panel-heading"><h3>${rangeEvents.length} event${rangeEvents.length === 1 ? "" : "s"} found</h3><p>Totals use the current troop roster available to this account.</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Event</th><th>Date</th><th>Location</th><th>Scouts reserved</th><th>Adults reserved</th></tr></thead><tbody>${rangeEvents.map((event) => { const counts = countEventReservations(event); return `<tr><td><a class="text-link" href="#/events/${event.id}">${event.title}</a></td><td>${event.dateLabel || formatEventListDate(event) || "-"}</td><td>${event.homeBase || event.location || "-"}</td><td><strong>${counts.scouts}</strong> / ${totalScouts}</td><td><strong>${counts.adults}</strong> / ${totalAdults}</td></tr>`; }).join("") || `<tr><td colspan="5">No events were found for this date range.</td></tr>`}</tbody></table></div></div></section>`;
+}
+function renderEventsList() { if (!canSeeOrgChart()) { renderAccessDenied(); return; } const sortedEvents = [...getSortedEvents()].reverse(); app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Events</p><h2>Editable event list</h2><p class="intro compact">Adult leaders can review the full imported schedule in one list and jump directly into any event editor.</p></div><div class="status-chip"><span>Route</span><strong>/events</strong></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Manage events</p><h2>All scheduled events</h2></div><div class="scribe-actions"><a class="button secondary" href="#/events/calendar">Open calendar view</a></div></div><div class="panel"><div class="panel-heading"><h3>${sortedEvents.length} events loaded</h3><p>Newest start date first. Use View for the display page or Edit to open the editor.</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Title</th><th>Dates</th><th>Category</th><th>Location</th><th>Audience</th><th>Actions</th></tr></thead><tbody>${sortedEvents.map((event) => `<tr><td>${event.title}</td><td>${event.dateLabel || "-"}</td><td>${event.category || "-"}</td><td>${event.location || "-"}</td><td>${event.audience || "-"}</td><td><div class="table-action-row"><a class="text-link" href="#/events/${event.id}">View</a><a class="text-link" href="#/events/${event.id}?edit=true">Edit</a></div></td></tr>`).join("")}</tbody></table></div></div></section>`; }
 function renderEventsIndex() {
   const selectedMonth = ensureSelectedMonth();
   if (!selectedMonth) {
@@ -1598,7 +1796,8 @@ function renderEventRoute(eventId) {
   const event = getEventById(eventId);
   if (!event) { renderNotFound(); return; }
   eventEditorSaveStatus = "saved";
-  const visitorView = !canSeeOrgChart();
+  const editMode = canSeeOrgChart() && isEventEditRoute();
+  const visitorView = !editMode;
   const gallery = visitorView ? getDisplayMediaItems(event) : (event.gallery?.length ? sortGalleryByDateTime(event.gallery) : (event.image ? [normalizeGalleryItem({ src: event.image }, 0)] : []));
   const audienceOptions = eventAudienceOptions.includes(event.audience) ? eventAudienceOptions : [...eventAudienceOptions, event.audience].filter(Boolean);
   const monthlyPattern = event.repeatMonthlyPattern || "date";
@@ -1615,7 +1814,8 @@ function renderEventRoute(eventId) {
     return `<article class="month-summary-card"><div class="panel-heading"><h3>${visitorView ? (activity.description || `Activity ${index + 1}`) : `Activity ${index + 1}`}</h3>${!visitorView ? `<button class="icon-button" type="button" data-remove-activity="${activity.id}" aria-label="Remove activity ${index + 1}">&times;</button>` : ""}</div>${visitorView ? `<p class="event-description">${activity.description || "No activity description yet."}</p><ul class="detail-list"><li>Location: ${activity.location || "Location TBD"}</li><li>Starts: ${formatExactEventDateTime(activity.startDate)}</li><li>Ends: ${formatExactEventDateTime(activity.endDate || activity.startDate)}</li></ul>` : `<div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Description</td><td><input type="text" data-activity-description="${activity.id}" value="${activity.description}" aria-label="Activity description" /></td></tr><tr><td>Location</td><td><input type="text" data-activity-location="${activity.id}" value="${activity.location}" aria-label="Activity location" /></td></tr><tr><td>Start</td><td><input type="datetime-local" data-activity-start="${activity.id}" value="${activityStart}" aria-label="Activity start date and time" /></td></tr><tr><td>End</td><td><input type="datetime-local" data-activity-end="${activity.id}" value="${activityEnd}" aria-label="Activity end date and time" /></td></tr></tbody></table></div>`}</article>`;
   }).join("") : `<article class="month-summary-card"><p class="event-description">${visitorView ? "No activities are listed for this event yet." : "No activities yet. Use Add activity to create the first one."}</p></article>`;
   const repeatRows = event.repeatEnabled ? `<tr><td>Repeat frequency</td><td><select data-event-edit-repeat-frequency aria-label="Event repeat frequency"><option value="daily"${event.repeatFrequency === "daily" ? " selected" : ""}>Daily</option><option value="weekly"${event.repeatFrequency === "weekly" ? " selected" : ""}>Weekly</option><option value="monthly"${event.repeatFrequency === "monthly" ? " selected" : ""}>Monthly</option></select></td></tr><tr><td>Repeat interval</td><td><input type="number" min="1" step="1" data-event-edit-repeat-interval value="${event.repeatInterval || 1}" aria-label="Repeat every number of intervals" /></td></tr><tr><td>Monthly repeat rule</td><td><select data-event-edit-repeat-monthly-pattern aria-label="Monthly repeat pattern"><option value="date"${monthlyPattern === "date" ? " selected" : ""}>Same date each month</option><option value="nth-weekday"${monthlyPattern === "nth-weekday" ? " selected" : ""}>Nth weekday of the month</option></select></td></tr><tr><td>Monthly ordinal</td><td><select data-event-edit-repeat-monthly-ordinal aria-label="Monthly repeat ordinal"><option value="first"${monthlyOrdinal === "first" ? " selected" : ""}>First</option><option value="second"${monthlyOrdinal === "second" ? " selected" : ""}>Second</option><option value="third"${monthlyOrdinal === "third" ? " selected" : ""}>Third</option><option value="fourth"${monthlyOrdinal === "fourth" ? " selected" : ""}>Fourth</option><option value="last"${monthlyOrdinal === "last" ? " selected" : ""}>Last</option></select></td></tr><tr><td>Monthly weekday</td><td><select data-event-edit-repeat-monthly-weekday aria-label="Monthly repeat weekday"><option value="sunday"${monthlyWeekday === "sunday" ? " selected" : ""}>Sunday</option><option value="monday"${monthlyWeekday === "monday" ? " selected" : ""}>Monday</option><option value="tuesday"${monthlyWeekday === "tuesday" ? " selected" : ""}>Tuesday</option><option value="wednesday"${monthlyWeekday === "wednesday" ? " selected" : ""}>Wednesday</option><option value="thursday"${monthlyWeekday === "thursday" ? " selected" : ""}>Thursday</option><option value="friday"${monthlyWeekday === "friday" ? " selected" : ""}>Friday</option><option value="saturday"${monthlyWeekday === "saturday" ? " selected" : ""}>Saturday</option></select></td></tr><tr><td>Repeat until</td><td><input type="datetime-local" data-event-edit-repeat-until value="${repeatUntilValue}" aria-label="Repeat until date and time" /></td></tr>` : "";
-  app.innerHTML = `${topNav()}<section class="event-route-hero"><div class="event-route-copy"><p class="eyebrow">${visitorView ? "Event details" : "Edit event"}</p><h2>${event.title}</h2><p class="intro compact">${visitorView ? "Public and non-adult-leader viewers see the full event story, home base, activities, and gallery here." : "Adult leaders can edit the event details, home base, activities, add images or videos, copy the event into a new future draft, or remove it when it should no longer appear on the calendar."}</p><div class="event-meta"><span>${event.category}</span><span>${event.dateLabel}</span><span>${event.homeBase || "Home base TBD"}</span>${event.repeatEnabled ? `<span>${repeatSummary}</span>` : ""}</div></div><div class="status-chip"><span>Route</span><strong>/events/${event.id}</strong></div></section>${visitorView ? `<section class="section event-route-grid"><article class="panel event-story"><div class="panel-heading"><h3>${event.title}</h3><p>${event.description}</p></div><div class="event-meta"><span>${event.audience}</span><span>${event.dateLabel}</span>${event.repeatEnabled ? `<span>${repeatSummary}</span>` : ""}</div><ul class="detail-list"><li>Location from where all activities will start: ${event.homeBase || "Home base TBD"}</li><li>Event starts: ${formatExactEventDateTime(event.startDate)}</li><li>Event ends: ${formatExactEventDateTime(event.endDate || event.startDate)}</li>${event.repeatEnabled ? `<li>${repeatSummary}</li>` : ""}</ul><div class="detail-note">${event.detailNote}</div></article><article class="panel map-panel"><div class="panel-heading"><h3>Home base</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></article></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Event activity list</h2></div><p class="section-copy">Each activity can have its own location and start/end time.</p></div><div class="detail-stack">${activitiesMarkup}</div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Gallery</p><h2>Event media</h2></div><p class="section-copy">Each image or video can carry its own caption, comments, and reactions.</p></div><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, false)).join("")}</div></section>` : `<section class="section event-route-grid"><article class="panel"><div class="panel-heading"><h3 class="event-content-heading"><span>Event content</span><span class="event-save-status" data-event-save-status="${eventEditorSaveStatus}">${eventEditorStatusLabel()}</span></h3><p>Changes save automatically after 0.5 seconds of inactivity.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Title</td><td><input type="text" data-event-edit-title value="${event.title}" aria-label="Event title" /></td></tr><tr><td>Category</td><td><input type="text" data-event-edit-category value="${event.category}" aria-label="Event category" /></td></tr><tr><td>Start</td><td><input type="datetime-local" data-event-edit-start value="${startValue}" aria-label="Event start date and time" /></td></tr><tr><td>End</td><td><input type="datetime-local" data-event-edit-end value="${endValue}" aria-label="Event end date and time" /></td></tr><tr><td>Home base</td><td><input type="text" data-event-edit-home-base value="${event.homeBase || ""}" aria-label="Location from where all activities will start" title="Location from where all activities will start" /></td></tr><tr><td>Audience</td><td><select data-event-edit-audience aria-label="Event audience">${audienceOptions.map((audience) => `<option value="${audience}"${audience === event.audience ? " selected" : ""}>${audience}</option>`).join("")}</select></td></tr><tr><td>Description</td><td><textarea data-event-edit-description aria-label="Event description">${event.description}</textarea></td></tr><tr><td>Detail note</td><td><textarea data-event-edit-note aria-label="Event detail note">${event.detailNote}</textarea></td></tr><tr><td>Upcoming</td><td><select data-event-edit-upcoming aria-label="Event upcoming status"><option value="true"${event.upcoming ? " selected" : ""}>Upcoming</option><option value="false"${!event.upcoming ? " selected" : ""}>Recent / past</option></select></td></tr><tr><td>Repeatable</td><td><select data-event-edit-repeat-enabled aria-label="Whether this event repeats"><option value="false"${!event.repeatEnabled ? " selected" : ""}>No</option><option value="true"${event.repeatEnabled ? " selected" : ""}>Yes</option></select></td></tr>${repeatRows}</tbody></table></div><div class="event-editor-actions"><button class="button secondary" type="button" data-add-activity="${event.id}">Add activity</button><button class="button secondary" type="button" data-copy-event="${event.id}">Copy as new event</button><button class="button danger" type="button" data-delete-event="${event.id}">Remove event</button></div></article><article class="panel"><div class="panel-heading"><h3>Visitor gallery</h3><p>Upload one or more image or video files at once. Items are stored oldest to newest by upload time; the selected primary item still displays first.</p></div><label class="button secondary upload-button"><input class="visually-hidden-file-input" type="file" data-event-image-upload accept="image/*,video/*" multiple />Upload media</label><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, true)).join("")}</div></article></section><section class="section"><div class="panel map-panel"><div class="panel-heading"><h3>Home base map preview</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Edit event activities</h2></div><p class="section-copy">Each activity can have its own description, location, and start/end date and time.</p></div><div class="detail-stack">${activitiesMarkup}</div></section>`}`;
+  const registrationMarkup = renderEventRegistrationPanel(event);
+  app.innerHTML = `${topNav()}<section class="event-route-hero"><div class="event-route-copy"><p class="eyebrow">${visitorView ? "Event details" : "Edit event"}</p><h2>${event.title}</h2><p class="intro compact">${visitorView ? "Public and non-adult-leader viewers see the full event story, home base, activities, and gallery here." : "Adult leaders can edit the event details, home base, activities, add images or videos, copy the event into a new future draft, or remove it when it should no longer appear on the calendar."}</p><div class="event-meta"><span>${event.category}</span><span>${event.dateLabel}</span><span>${event.homeBase || "Home base TBD"}</span>${event.repeatEnabled ? `<span>${repeatSummary}</span>` : ""}</div></div><div class="status-chip"><span>Route</span><strong>/events/${event.id}</strong></div></section>${registrationMarkup}${visitorView ? `<section class="section event-route-grid"><article class="panel event-story"><div class="panel-heading"><h3>${event.title}</h3><p>${event.description}</p></div><div class="event-meta"><span>${event.audience}</span><span>${event.dateLabel}</span>${event.repeatEnabled ? `<span>${repeatSummary}</span>` : ""}</div><ul class="detail-list"><li>Location from where all activities will start: ${event.homeBase || "Home base TBD"}</li><li>Event starts: ${formatExactEventDateTime(event.startDate)}</li><li>Event ends: ${formatExactEventDateTime(event.endDate || event.startDate)}</li>${event.repeatEnabled ? `<li>${repeatSummary}</li>` : ""}</ul><div class="detail-note">${event.detailNote}</div>${canSeeOrgChart() ? `<div class="scribe-actions"><a class="button secondary" href="#/events/${event.id}?edit=true">Edit</a></div>` : ""}</article><article class="panel map-panel"><div class="panel-heading"><h3>Home base</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></article></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Event activity list</h2></div><p class="section-copy">Each activity can have its own location and start/end time.</p></div><div class="detail-stack">${activitiesMarkup}</div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Gallery</p><h2>Event media</h2></div><p class="section-copy">Each image or video can carry its own caption, comments, and reactions.</p></div><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, false)).join("")}</div></section>` : `<section class="section event-route-grid"><article class="panel"><div class="panel-heading"><h3 class="event-content-heading"><span>Event content</span><span class="event-save-status" data-event-save-status="${eventEditorSaveStatus}">${eventEditorStatusLabel()}</span></h3><p>Changes save automatically after 0.5 seconds of inactivity.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Title</td><td><input type="text" data-event-edit-title value="${event.title}" aria-label="Event title" /></td></tr><tr><td>Category</td><td><input type="text" data-event-edit-category value="${event.category}" aria-label="Event category" /></td></tr><tr><td>Start</td><td><input type="datetime-local" data-event-edit-start value="${startValue}" aria-label="Event start date and time" /></td></tr><tr><td>End</td><td><input type="datetime-local" data-event-edit-end value="${endValue}" aria-label="Event end date and time" /></td></tr><tr><td>Home base</td><td><input type="text" data-event-edit-home-base value="${event.homeBase || ""}" aria-label="Location from where all activities will start" title="Location from where all activities will start" /></td></tr><tr><td>Audience</td><td><select data-event-edit-audience aria-label="Event audience">${audienceOptions.map((audience) => `<option value="${audience}"${audience === event.audience ? " selected" : ""}>${audience}</option>`).join("")}</select></td></tr><tr><td>Description</td><td><textarea data-event-edit-description aria-label="Event description">${event.description}</textarea></td></tr><tr><td>Detail note</td><td><textarea data-event-edit-note aria-label="Event detail note">${event.detailNote}</textarea></td></tr><tr><td>Upcoming</td><td><select data-event-edit-upcoming aria-label="Event upcoming status"><option value="true"${event.upcoming ? " selected" : ""}>Upcoming</option><option value="false"${!event.upcoming ? " selected" : ""}>Recent / past</option></select></td></tr><tr><td>Repeatable</td><td><select data-event-edit-repeat-enabled aria-label="Whether this event repeats"><option value="false"${!event.repeatEnabled ? " selected" : ""}>No</option><option value="true"${event.repeatEnabled ? " selected" : ""}>Yes</option></select></td></tr>${repeatRows}</tbody></table></div><div class="event-editor-actions"><button class="button secondary" type="button" data-add-activity="${event.id}">Add activity</button><button class="button secondary" type="button" data-copy-event="${event.id}">Copy as new event</button><button class="button danger" type="button" data-delete-event="${event.id}">Remove event</button></div></article><article class="panel"><div class="panel-heading"><h3>Visitor gallery</h3><p>Upload one or more image or video files at once. Items are stored oldest to newest by upload time; the selected primary item still displays first.</p></div><label class="button secondary upload-button"><input class="visually-hidden-file-input" type="file" data-event-image-upload accept="image/*,video/*" multiple />Upload media</label><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, true)).join("")}</div></article></section><section class="section"><div class="panel map-panel"><div class="panel-heading"><h3>Home base map preview</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Edit event activities</h2></div><p class="section-copy">Each activity can have its own description, location, and start/end date and time.</p></div><div class="detail-stack">${activitiesMarkup}</div></section>`}`;
 }
 function renderScribeIndex() { if (canSeeOrgChart()) { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scribe attendance</p><h2>Adult leader attendance spreadsheet</h2><p class="intro compact">This view shows all scouts in the first column and meeting dates across the top, with the most recent meeting on the far right.</p></div><div class="status-chip"><span>Route</span><strong>/scribe/attendance</strong></div></section>${renderAdultLeaderAttendanceMatrix()}<section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Attendance routes</h3><p>Additional attendance workflows remain available from here.</p></div><ul class="detail-list"><li><a class="text-link" href="#/scribe/attendance/history">Attendance history</a></li><li><a class="text-link" href="#/scribe/attendance/reports/monthly">Monthly report</a></li><li><a class="text-link" href="#/scribe/attendance/print">Printable attendance sheet</a></li><li><a class="text-link" href="#/scribe/attendance/upload">Upload completed sheet</a></li></ul></article><article class="panel"><div class="panel-heading"><h3>Roster summary</h3><p>${roster.length} scouts with parents/guardians loaded for review.</p></div><ul class="detail-list"><li>Total scouts: ${roster.length}</li><li>Patrols: ${patrolNames.join(", ")}</li><li>Leadership positions assigned: ${roster.filter((scout) => scout.leadershipRole).length}</li></ul></article></section>`; return; } app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Scribe attendance</p><h2>Regular meeting attendance workspace</h2><p class="intro compact">This route family models the dedicated Scribe workflow for meeting attendance, print sheets, uploads, history, and monthly reporting.</p></div><div class="status-chip"><span>Route</span><strong>/scribe/attendance</strong></div></section><section class="section dashboard-grid"><article class="panel"><div class="panel-heading"><h3>Route family</h3><p>Available pages in the prototype.</p></div><ul class="detail-list"><li><a class="text-link" href="#/scribe/attendance/event/troop-meeting-stem">Meeting attendance sheet</a></li><li><a class="text-link" href="#/scribe/attendance/print">Printable attendance sheet</a></li><li><a class="text-link" href="#/scribe/attendance/upload">Upload completed sheet</a></li><li><a class="text-link" href="#/scribe/attendance/history">Attendance history</a></li><li><a class="text-link" href="#/scribe/attendance/reports/monthly">Monthly report</a></li></ul></article><article class="panel"><div class="panel-heading"><h3>Roster summary</h3><p>${roster.length} scouts with parents/guardians loaded for review.</p></div><ul class="detail-list"><li>Total scouts: ${roster.length}</li><li>Patrols: ${patrolNames.join(", ")}</li><li>Leadership positions assigned: ${roster.filter((scout) => scout.leadershipRole).length}</li></ul></article><article class="panel"><div class="panel-heading"><h3>Current meeting</h3><p>Sample attendance event.</p></div><ul class="detail-list"><li>Event: Regular Meeting: STEM Challenge Night</li><li>Date: Apr 8, 2026</li><li>Statuses: Present / Absent</li></ul></article></section>`; }
 function renderScribeEvent() { app.innerHTML = `${topNav()}<section class="section-heading"><div><p class="eyebrow">Scribe attendance</p><h2>Regular Meeting: STEM Challenge Night</h2></div><p class="section-copy">Scouts grouped by patrol with Unassigned support available when needed.</p></section><div class="scribe-actions"><a class="button secondary" href="#/scribe/attendance/print">Print sheet</a><a class="button secondary" href="#/scribe/attendance/upload">Upload completed sheet</a><a class="button secondary" href="#/scribe/attendance/history">View history</a></div>${groupedByPatrol.map((group) => `<section class="section"><div class="panel"><div class="panel-heading"><h3>${getPatrolDisplayName(group.name)}${group.name ? " Patrol" : ""}</h3><p>${group.scouts.length} scouts</p></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Scout</th><th>Gender</th><th>Rank</th><th>Leadership</th><th>Attendance</th><th>Contacts</th></tr></thead><tbody>${group.scouts.map((scout) => `<tr><td>${renderScoutName(scout, { className: "text-link" })}</td><td>${scout.gender}</td><td>${scout.rank}</td><td>${scout.leadershipRole || "-"}</td><td><span class="attendance-badge ${scout.attendance === "Present" ? "present" : "absent"}">${scout.attendance}</span></td><td>${scout.parents.map((parent) => `${parent.relationship}: ${parent.name}`).join("<br />")}</td></tr>`).join("")}</tbody></table></div></div></section>`).join("")}`; }
@@ -1672,7 +1872,7 @@ function renderFriendlyAccessMessage(message = "Looks like you are flailing a bi
 }
 function renderAccessDenied() { renderFriendlyAccessMessage(); }
 function renderNotFound() { app.innerHTML = `${topNav()}<section class="dashboard-banner"><div><p class="eyebrow">Prototype route</p><h2>Page not found</h2><p class="intro compact">Try the Home, Scribe Attendance, or Org Chart routes from the navigation above.</p></div></section>`; }
-function renderRoute() { renderIdentityControls(); if (appLoading) { renderLoadingRoute(); applyTitleAttributes(); return; } const hash = window.location.hash || "#/"; if (!currentActor?.authenticated && (hash.startsWith("#/scribe/") || hash.startsWith("#/scouts") || hash.startsWith("#/patrols") || hash.startsWith("#/adults") || hash.startsWith("#/org-chart") || hash.startsWith("#/holidays"))) { renderAccessDenied(); applyTitleAttributes(); return; } if (hash === "#/" || hash === "") { if (modeSelect.value === "public") { renderPublic(); applyTitleAttributes(); return; } renderDashboard(modeSelect.value); applyTitleAttributes(); return; } if (hash === "#/resources") { renderResourcesRoute(); applyTitleAttributes(); return; } if (hash === "#/events") { if (canSeeOrgChart()) { renderEventsList(); applyTitleAttributes(); return; } renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/calendar") { renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/list") { renderEventsList(); applyTitleAttributes(); return; } if (hash.startsWith("#/events/")) { renderEventRoute(hash.replace("#/events/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance") { renderScribeIndex(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/event/troop-meeting-stem") { renderScribeEvent(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/print") { renderScribePrint(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/upload") { renderScribeUpload(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/history") { renderScribeHistory(); applyTitleAttributes(); return; } if (hash.startsWith("#/scribe/attendance/history/item/")) { renderScribeHistoryItem(hash.replace("#/scribe/attendance/history/item/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/reports/monthly") { renderScribeMonthly(); applyTitleAttributes(); return; } if (hash === "#/scouts") { renderScoutsRoute(); applyTitleAttributes(); return; } if (hash === "#/patrols") { renderPatrolsRoute(); applyTitleAttributes(); return; } if (hash === "#/holdays") { window.location.hash = "#/holidays"; return; } if (hash === "#/holidays") { renderHolidaysRoute(); applyTitleAttributes(); return; } if (hash.startsWith("#/holidays/")) { renderHolidayEditor(hash.replace("#/holidays/", "")); applyTitleAttributes(); return; } if (hash === "#/adult") { window.location.hash = "#/adults"; return; } if (hash === "#/adults") { renderAdultsRoute(); applyTitleAttributes(); return; } if (hash === "#/org-chart") { renderOrgChart(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-scouts") { renderScoutOrgChartEditor(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-adults") { renderAdultOrgChartEditor(); applyTitleAttributes(); return; } if (hash.startsWith("#/adults/")) { renderAdultRecordEditor(hash.replace("#/adults/", "")); applyTitleAttributes(); return; } if (hash.startsWith("#/scouts/")) { renderScoutRecordEditor(hash.replace("#/scouts/", "")); applyTitleAttributes(); return; } renderNotFound(); applyTitleAttributes(); }
+function renderRoute() { renderIdentityControls(); if (appLoading) { renderLoadingRoute(); applyTitleAttributes(); return; } const hash = window.location.hash || "#/"; if (!currentActor?.authenticated && (hash.startsWith("#/scribe/") || hash.startsWith("#/scouts") || hash.startsWith("#/patrols") || hash.startsWith("#/adults") || hash.startsWith("#/org-chart") || hash.startsWith("#/holidays") || hash.startsWith("#/reservations"))) { renderAccessDenied(); applyTitleAttributes(); return; } if (hash === "#/" || hash === "") { if (modeSelect.value === "public") { renderPublic(); applyTitleAttributes(); return; } renderDashboard(modeSelect.value); applyTitleAttributes(); return; } if (hash === "#/resources") { renderResourcesRoute(); applyTitleAttributes(); return; } if (hash === "#/events") { if (canSeeOrgChart()) { renderEventsList(); applyTitleAttributes(); return; } renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/calendar") { renderEventsIndex(); applyTitleAttributes(); return; } if (hash === "#/events/list") { renderEventsList(); applyTitleAttributes(); return; } if (hash.startsWith("#/events/")) { renderEventRoute(getEventDetailRouteId()); applyTitleAttributes(); return; } if (hash === "#/reservations" || hash.startsWith("#/reservations?")) { renderReservationsRoute(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance") { renderScribeIndex(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/event/troop-meeting-stem") { renderScribeEvent(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/print") { renderScribePrint(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/upload") { renderScribeUpload(); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/history") { renderScribeHistory(); applyTitleAttributes(); return; } if (hash.startsWith("#/scribe/attendance/history/item/")) { renderScribeHistoryItem(hash.replace("#/scribe/attendance/history/item/", "")); applyTitleAttributes(); return; } if (hash === "#/scribe/attendance/reports/monthly") { renderScribeMonthly(); applyTitleAttributes(); return; } if (hash === "#/scouts") { renderScoutsRoute(); applyTitleAttributes(); return; } if (hash === "#/patrols") { renderPatrolsRoute(); applyTitleAttributes(); return; } if (hash === "#/holdays") { window.location.hash = "#/holidays"; return; } if (hash === "#/holidays") { renderHolidaysRoute(); applyTitleAttributes(); return; } if (hash.startsWith("#/holidays/")) { renderHolidayEditor(hash.replace("#/holidays/", "")); applyTitleAttributes(); return; } if (hash === "#/adult") { window.location.hash = "#/adults"; return; } if (hash === "#/adults") { renderAdultsRoute(); applyTitleAttributes(); return; } if (hash === "#/org-chart") { renderOrgChart(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-scouts") { renderScoutOrgChartEditor(); applyTitleAttributes(); return; } if (hash === "#/org-chart/edit-adults") { renderAdultOrgChartEditor(); applyTitleAttributes(); return; } if (hash.startsWith("#/adults/")) { renderAdultRecordEditor(hash.replace("#/adults/", "")); applyTitleAttributes(); return; } if (hash.startsWith("#/scouts/")) { renderScoutRecordEditor(hash.replace("#/scouts/", "")); applyTitleAttributes(); return; } renderNotFound(); applyTitleAttributes(); }
 function applyScoutFilter(input) {
   const section = input.closest(".section");
   const scope = section?.querySelector("[data-scout-filter-scope]");
@@ -1786,6 +1986,26 @@ document.addEventListener("click", async (event) => {
   renderRoute();
 });
 document.addEventListener("change", async (event) => {
+  const reservationDateInput = event.target.closest("[data-reservation-start-date], [data-reservation-end-date]");
+  if (reservationDateInput) {
+    const currentRange = getReservationRouteRange();
+    const startDate = document.querySelector("[data-reservation-start-date]")?.value || currentRange.startDate;
+    const endDate = document.querySelector("[data-reservation-end-date]")?.value || currentRange.endDate;
+    const nextHash = reservationRouteUrl(startDate, endDate);
+    if (window.location.hash !== nextHash) {
+      window.location.hash = nextHash;
+      return;
+    }
+    setAppLoading("Loading reservations");
+    try {
+      await loadReservationRangeEvents();
+    } finally {
+      clearAppLoading();
+    }
+    renderRoute();
+    return;
+  }
+
   const scoutSessionSelect = event.target.closest("#activeScoutSelect");
   if (!scoutSessionSelect) return;
   setActiveScoutId(scoutSessionSelect.value);
@@ -1846,7 +2066,8 @@ document.addEventListener("click", async (event) => {
 });
 window.addEventListener("hashchange", async () => {
   const hash = window.location.hash || "#/";
-  const needsAsyncRouteLoad = hash.startsWith("#/events/calendar") || Boolean(getEventDetailRouteId());
+  const isReservationsRoute = hash === "#/reservations" || hash.startsWith("#/reservations?");
+  const needsAsyncRouteLoad = hash.startsWith("#/events/calendar") || Boolean(getEventDetailRouteId()) || (isReservationsRoute && reservationRouteHasExplicitRange() && currentActor?.authenticated);
   if (needsAsyncRouteLoad) setAppLoading("Loading page");
   try {
     if (hash.startsWith("#/events/calendar")) {
@@ -1859,6 +2080,13 @@ window.addEventListener("hashchange", async () => {
     const detailEventId = getEventDetailRouteId();
     if (detailEventId) {
       await hydratePublicCalendarEventMedia(detailEventId);
+    }
+    if (isReservationsRoute && reservationRouteHasExplicitRange() && currentActor?.authenticated) {
+      try {
+        await loadReservationRangeEvents();
+      } catch (error) {
+        console.warn(error);
+      }
     }
   } finally {
     if (needsAsyncRouteLoad) clearAppLoading();
@@ -2015,6 +2243,17 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const eventRegistrationButton = event.target.closest("[data-event-register]");
+  if (eventRegistrationButton) {
+    const currentEvent = getEventById(eventRegistrationButton.dataset.eventRegister);
+    const person = getRegistrationPeopleForCurrentActor().find((entry) => entry.personType === eventRegistrationButton.dataset.registerPersonType && entry.personId === eventRegistrationButton.dataset.registerPersonId);
+    if (!currentEvent || !person || isPersonRegisteredForEvent(currentEvent, person)) return;
+    registerPersonForEvent(currentEvent, person);
+    await saveEventRegistrations();
+    renderRoute();
+    return;
+  }
+
   const addActivityButton = event.target.closest("[data-add-activity]");
   if (addActivityButton) {
     if (!canSeeOrgChart()) return;
@@ -2041,7 +2280,7 @@ document.addEventListener("click", async (event) => {
   const removeActivityButton = event.target.closest("[data-remove-activity]");
   if (removeActivityButton) {
     if (!canSeeOrgChart()) return;
-    const eventId = (window.location.hash || "").replace("#/events/", "");
+    const eventId = getEventDetailRouteId();
     const currentEvent = getEventById(eventId);
     if (!currentEvent) return;
     currentEvent.activities = (currentEvent.activities || []).filter((activity) => activity.id !== removeActivityButton.dataset.removeActivity);
@@ -2053,7 +2292,7 @@ document.addEventListener("click", async (event) => {
   const makePrimaryImageButton = event.target.closest("[data-make-primary-image]");
   if (makePrimaryImageButton) {
     if (!canSeeOrgChart()) return;
-    const eventId = (window.location.hash || "").replace("#/events/", "");
+    const eventId = getEventDetailRouteId();
     const currentEvent = syncEventFromEditor(eventId);
     if (!currentEvent) return;
     const gallery = [...(currentEvent.gallery || [])];
@@ -2070,7 +2309,7 @@ document.addEventListener("click", async (event) => {
   const removeGalleryImageButton = event.target.closest("[data-remove-gallery-image]");
   if (removeGalleryImageButton) {
     if (!canSeeOrgChart()) return;
-    const eventId = (window.location.hash || "").replace("#/events/", "");
+    const eventId = getEventDetailRouteId();
     const currentEvent = syncEventFromEditor(eventId);
     if (!currentEvent) return;
     const imageId = removeGalleryImageButton.dataset.removeGalleryImage;
@@ -2085,7 +2324,7 @@ document.addEventListener("click", async (event) => {
 
   const galleryReactionButton = event.target.closest("[data-gallery-reaction]");
   if (galleryReactionButton) {
-    const eventId = (window.location.hash || "").replace("#/events/", "");
+    const eventId = getEventDetailRouteId();
     const currentEvent = getEventById(eventId);
     const viewer = getCurrentViewerIdentity();
     if (!currentEvent || !viewer) return;
@@ -2101,7 +2340,7 @@ document.addEventListener("click", async (event) => {
 
   const addGalleryCommentButton = event.target.closest("[data-add-gallery-comment]");
   if (addGalleryCommentButton) {
-    const eventId = (window.location.hash || "").replace("#/events/", "");
+    const eventId = getEventDetailRouteId();
     const currentEvent = getEventById(eventId);
     const viewer = getCurrentViewerIdentity();
     if (!currentEvent || !viewer) return;
@@ -2118,7 +2357,7 @@ document.addEventListener("click", async (event) => {
 
   const removeGalleryCommentButton = event.target.closest("[data-remove-gallery-comment]");
   if (removeGalleryCommentButton) {
-    const eventId = (window.location.hash || "").replace("#/events/", "");
+    const eventId = getEventDetailRouteId();
     const currentEvent = getEventById(eventId);
     if (!currentEvent) return;
     const image = getGalleryImageById(currentEvent, removeGalleryCommentButton.dataset.galleryImageId);
@@ -2277,7 +2516,7 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("focusout", async (event) => {
   const eventEditorField = event.target.closest(eventEditorFieldSelector);
   if (eventEditorField) {
-    const eventId = (window.location.hash || "").replace("#/events/", "");
+    const eventId = getEventDetailRouteId();
     if (!eventId || !canSeeOrgChart()) return;
     await flushEventAutosave(eventId);
     return;
@@ -2454,7 +2693,7 @@ document.addEventListener("input", (event) => {
 
   const eventEditorField = event.target.closest(eventEditorFieldSelector);
   if (!eventEditorField) return;
-  const eventId = (window.location.hash || "").replace("#/events/", "");
+  const eventId = getEventDetailRouteId();
   queueEventAutosave(eventId, 500);
 });
 document.addEventListener("change", async (event) => {
@@ -2495,7 +2734,7 @@ document.addEventListener("change", async (event) => {
   }
   const eventEditorField = event.target.closest(eventEditorFieldSelector);
   if (!eventEditorField) return;
-  const eventId = (window.location.hash || "").replace("#/events/", "");
+  const eventId = getEventDetailRouteId();
   if (eventEditorField.matches("[data-event-edit-repeat-enabled]")) {
     setEventEditorSaveStatus("dirty");
     setEventEditorSaveStatus("saving");
@@ -2554,7 +2793,7 @@ document.addEventListener("change", async (event) => {
   const eventImageUploadInput = event.target.closest("[data-event-image-upload]");
   if (eventImageUploadInput) {
     const files = [...(eventImageUploadInput.files || [])].filter((file) => /^(image|video)\//.test(String(file.type || "")));
-    const eventId = (window.location.hash || "").replace("#/events/", "");
+    const eventId = getEventDetailRouteId();
     if (!files.length || !eventId || !canSeeOrgChart()) return;
     const uploadBatchTime = Date.now();
     Promise.all(files.map((file, index) => Promise.all([readFileAsDataUrl(file), readImageDateTime(file)]).then(([item, imageDateTime]) => {

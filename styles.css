@@ -19,6 +19,7 @@ body::before { content: ""; position: fixed; inset: 0; pointer-events: none; bac
 .page-shell { width: min(1200px, calc(100% - 32px)); margin: 0 auto; padding: 18px 0 40px; }
 .site-header, .hero, .dashboard-banner, .panel, .event-card { backdrop-filter: blur(16px); }
 .site-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; padding: 20px 22px; border-radius: var(--radius-lg); border: 1px solid var(--line); background: linear-gradient(135deg, rgba(255, 250, 242, 0.88), rgba(248, 239, 223, 0.78)); box-shadow: var(--shadow); }
+.site-header > div { min-width: 0; max-width: 100%; }
 .eyebrow { margin: 0 0 8px; font-size: 0.82rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: var(--forest); }
 h1, h2, h3 { margin: 0; line-height: 1.05; }
 h1, h2 { font-family: "Source Serif 4", serif; }
@@ -31,16 +32,24 @@ p { line-height: 1.6; }
 .event-save-status[data-event-save-status="dirty"], .record-save-status[data-scout-save-status="dirty"], .record-save-status[data-adult-save-status="dirty"] { color: #8a3d2f; background: rgba(161, 88, 73, 0.14); border: 1px solid rgba(161, 88, 73, 0.26); }
 .event-save-status[data-event-save-status="saving"], .record-save-status[data-scout-save-status="saving"], .record-save-status[data-adult-save-status="saving"] { color: var(--forest-deep); background: rgba(200, 143, 47, 0.18); border: 1px solid rgba(200, 143, 47, 0.32); }
 .event-save-status[data-event-save-status="saved"], .record-save-status[data-scout-save-status="saved"], .record-save-status[data-adult-save-status="saved"] { color: var(--forest-deep); background: rgba(50, 82, 61, 0.12); border: 1px solid rgba(50, 82, 61, 0.22); }
-.intro { max-width: 62ch; margin: 10px 0 0; color: var(--muted); }
+.intro { max-width: min(62ch, 100%); margin: 10px 0 0; color: var(--muted); overflow-wrap: break-word; }
 .intro.compact { max-width: 60ch; }
 .header-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 14px; }
 .view-toggle { display: grid; gap: 8px; font-size: 0.95rem; color: var(--muted); }
+.auth-status { grid-template-columns: 1fr auto; align-items: center; column-gap: 10px; }
+.auth-status > span,
+.auth-status > strong { grid-column: 1; }
+.auth-status > .auth-icon-button { grid-column: 2; grid-row: 1 / span 2; }
+.auth-icon-button { display: inline-grid; place-items: center; width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255, 250, 242, 0.92); color: var(--forest-deep); box-shadow: 0 10px 24px rgba(44, 55, 43, 0.10); }
+.auth-icon-button svg { width: 22px; height: 22px; display: block; }
+.auth-icon-button:hover,
+.auth-icon-button:focus-visible { background: rgba(50, 82, 61, 0.10); color: var(--forest); outline: none; }
 .login-panel { width: min(380px, 100%); border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(255, 250, 242, 0.92); box-shadow: 0 14px 34px rgba(44, 55, 43, 0.10); }
-.login-panel summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 44px; padding: 10px 14px; color: var(--forest-deep); font-weight: 800; cursor: pointer; list-style: none; }
+.login-panel summary { display: flex; align-items: center; justify-content: flex-end; gap: 14px; min-height: 44px; padding: 10px 14px; color: var(--forest-deep); font-weight: 800; cursor: pointer; list-style: none; }
 .login-panel summary::-webkit-details-marker { display: none; }
-.login-panel summary::after { content: "+"; display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 999px; background: rgba(50, 82, 61, 0.10); color: var(--forest-deep); font-weight: 800; }
+.login-panel summary::after { content: ""; display: none; }
 .login-panel[open] summary { border-bottom: 1px solid var(--line); }
-.login-panel[open] summary::after { content: "−"; }
+.login-panel[open] summary .auth-icon-button { background: rgba(50, 82, 61, 0.10); }
 .login-panel .login-form { padding: 14px; }
 .login-form { grid-template-columns: repeat(2, minmax(160px, 1fr)); align-items: end; }
 .login-form span { grid-column: 1 / -1; }
@@ -160,6 +169,8 @@ textarea { min-height: 120px; resize: vertical; }
 .panel { padding: 22px; }
 .panel-heading { margin-bottom: 14px; }
 .panel-heading p { margin: 6px 0 0; color: var(--muted); }
+.reservation-range-controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+.reservation-range-controls label { display: grid; flex: 1 1 220px; gap: 6px; min-width: min(220px, 100%); color: var(--muted); font-weight: 700; }
 .detail-list { margin: 0; padding-left: 18px; color: var(--muted); }
 .detail-list li + li { margin-top: 10px; }
 .event-card { overflow: hidden; }
@@ -191,6 +202,15 @@ textarea { min-height: 120px; resize: vertical; }
 .registered-scouts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
 .registered-scouts-label { color: var(--muted); font-size: 0.86rem; font-weight: 700; }
 .registered-scout-chip { display: inline-flex; align-items: center; padding: 7px 10px; border-radius: 999px; background: rgba(31, 111, 67, 0.12); color: var(--forest-deep); font-size: 0.84rem; font-weight: 700; }
+.event-registration-panel { max-width: 900px; }
+.event-registration-list { display: grid; gap: 10px; }
+.event-registration-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid rgba(50, 82, 61, 0.12); }
+.event-registration-row:first-child { border-top: 0; }
+.event-registration-row strong,
+.event-registration-row span { display: block; }
+.event-registration-row span { color: var(--muted); font-size: 0.88rem; }
+.event-registration-link { border: 0; background: transparent; cursor: pointer; font: inherit; padding: 0; white-space: nowrap; }
+.event-registration-link.is-registered { color: var(--forest); cursor: default; font-weight: 800; text-decoration: none; }
 .detail-note { padding: 16px; border-radius: var(--radius-sm); background: rgba(50, 82, 61, 0.08); color: var(--muted); }
 .sync-card { display: grid; gap: 12px; }
 .sync-card > div { padding: 14px 16px; border-radius: var(--radius-sm); background: rgba(33, 55, 42, 0.92); color: #f8f2e7; }
