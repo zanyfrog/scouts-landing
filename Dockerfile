@@ -6,6 +6,7 @@ COPY scouts-landing/package.json ./package.json
 COPY scouts-landing/index.html ./index.html
 COPY scouts-landing/styles.css ./styles.css
 COPY scouts-landing/app.js ./app.js
+COPY scouts-landing/events.js ./events.js
 COPY scouts-landing/server.js ./server.js
 COPY scouts-landing/assets ./assets
 COPY scouts-landing/resources ./resources

@@ -153,11 +153,11 @@ Source: [Scouting America Chess Merit Badge requirements](https://www.scouting.o
 ## Counselor Sign-Off Notes
 
 | Requirement | Ready | Counselor Notes |
-| --- | --- | --- |
-| 1 | [ ] | |
-| 2 | [ ] | |
-| 3 | [ ] | |
-| 4 | [ ] | |
-| 5 | [ ] | |
-| 6 | [ ] | |
-| 7 | [ ] | |
+| ----------- | ----- | --------------- |
+| 1           | [ ]   |                 |
+| 2           | [ ]   |                 |
+| 3           | [ ]   |                 |
+| 4           | [ ]   |                 |
+| 5           | [ ]   |                 |
+| 6           | [ ]   |                 |
+| 7           | [ ]   |                 |
