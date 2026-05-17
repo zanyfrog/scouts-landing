@@ -30,9 +30,11 @@ All write endpoints replace the full collection named in the request body.
 | Method | Endpoint                         | Access                        | Request Body                           | Description                                                                      |
 | ------ | -------------------------------- | ----------------------------- | -------------------------------------- | -------------------------------------------------------------------------------- |
 | `POST` | `/api/scouts`                    | Operational write access      | `{ "scouts": [...] }`                  | Replaces all scouts. Allowed for administrators and adult leaders.               |
+| `DELETE` | `/api/scouts/:scoutId`         | Operational write access      | n/a                                    | Removes one scout and related adult/scout relationships and event registrations. |
 | `POST` | `/api/adults`                    | Operational write access      | `{ "adults": [...] }`                  | Replaces all adults. Allowed for administrators and adult leaders.               |
+| `DELETE` | `/api/adults/:adultId`         | Operational write access      | n/a                                    | Removes one adult and related leader and adult/scout relationship rows.          |
 | `POST` | `/api/adult-leaders`             | Operational write access      | `{ "adultLeaders": [...] }`            | Replaces all adult leader records. Allowed for administrators and adult leaders. |
-| `POST` | `/api/adult-scout-relationships` | Administrator only            | `{ "adultScoutRelationships": [...] }` | Replaces all adult/scout relationships.                                          |
+| `POST` | `/api/adult-scout-relationships` | Administrator or adult leader | `{ "adultScoutRelationships": [...] }` | Replaces all adult/scout relationships.                                          |
 | `POST` | `/api/patrols`                   | Operational write access      | `{ "patrols": [...] }`                 | Replaces all patrols. Allowed for administrators and adult leaders.              |
 | `POST` | `/api/events`                    | Administrator or adult leader | `{ "events": [...] }`                  | Replaces all events.                                                             |
 

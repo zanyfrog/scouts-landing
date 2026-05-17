@@ -10,6 +10,7 @@ COPY scouts-landing/events.js ./events.js
 COPY scouts-landing/server.js ./server.js
 COPY scouts-landing/assets ./assets
 COPY scouts-landing/resources ./resources
+COPY scouts-lib/src ./scouts-lib
 
 ENV PORT=4173
 ENV ORM_BASE_URL=http://127.0.0.1:4175

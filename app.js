@@ -15,6 +15,8 @@ let savedParentGuardians = [];
 let scoutLeadershipGroups = [];
 let showAddAdultRow = false;
 let showAddPatrolRow = false;
+let scoutDirectorySort = { key: "name", direction: "asc" };
+let editableErrorMessage = "";
 const defaultEvents = [];
 let events = [];
 const loadedCalendarMonths = new Set();
@@ -293,8 +295,11 @@ const scoutRankOrder = {
 	Bobcat: 1,
 };
 const eventEditorFieldSelector =
-	"[data-event-edit-title], [data-event-edit-category], [data-event-edit-start], [data-event-edit-end], [data-event-edit-home-base], [data-event-edit-audience], [data-event-edit-description], [data-event-edit-note], [data-event-edit-upcoming], [data-event-edit-repeat-enabled], [data-event-edit-repeat-frequency], [data-event-edit-repeat-interval], [data-event-edit-repeat-until], [data-event-edit-repeat-monthly-pattern], [data-event-edit-repeat-monthly-ordinal], [data-event-edit-repeat-monthly-weekday], [data-gallery-title], [data-gallery-description], [data-activity-description], [data-activity-location], [data-activity-start], [data-activity-end]";
+	"[data-event-edit-title], [data-event-edit-category], [data-event-edit-start], [data-event-edit-end], [data-event-edit-home-base], [data-event-edit-audience], [data-event-edit-description], [data-event-edit-note], [data-event-edit-registration-required], [data-event-edit-upcoming], [data-event-edit-repeat-enabled], [data-event-edit-repeat-frequency], [data-event-edit-repeat-interval], [data-event-edit-repeat-until], [data-event-edit-repeat-monthly-pattern], [data-event-edit-repeat-monthly-ordinal], [data-event-edit-repeat-monthly-weekday], [data-gallery-title], [data-gallery-description], [data-activity-description], [data-activity-location], [data-activity-start], [data-activity-end]";
 let eventAutosaveTimer = null;
+let scoutRecordAutosaveTimer = null;
+let adultRecordAutosaveTimer = null;
+const detailRecordAutosaveDelay = 2000;
 let eventEditorSaveStatus = "saved";
 let scoutRecordSaveStatus = "saved";
 let adultRecordSaveStatus = "saved";
@@ -874,11 +879,21 @@ function renderAdultDirectoryActionCell(adult, leaderAssignment) {
 	const leaderIcon = leaderAssignment
 		? `<img class="leader-emblem adult-directory-leader-icon" src="${getAdultLeaderEmblem(leaderAssignment.role)}" alt="${leaderAssignment.role} emblem" title="${leaderAssignment.role}" />`
 		: "";
+	const adultRouteId = encodeURIComponent(String(adult.id || ""));
 	return `<span class="adult-directory-actions">
-<a class="icon-button adult-edit-icon" href="#/adults/${adult.id}" aria-label="Edit ${adult.name}" title="Edit ${adult.name}">&#9998;</a>${leaderIcon}</span>`;
+<a class="icon-button adult-edit-icon" href="#/adults/${adultRouteId}" data-edit-adult="${adultRouteId}" aria-label="Edit ${adult.name}" title="Edit ${adult.name}">&#9998;</a><button class="icon-button remove-record-icon" type="button" data-delete-adult-record="${adultRouteId}" aria-label="Remove ${adult.name}" title="Remove ${adult.name}">${renderTrashIcon()}</button>${leaderIcon}</span>`;
 }
 function renderScoutDirectoryActionCell(scout) {
-	return `<a class="icon-button scout-edit-icon" href="#/scouts/${scout.id}" aria-label="Edit ${scout.name}" title="Edit ${scout.name}">&#9998;</a>`;
+	const scoutRouteId = encodeURIComponent(String(scout.id || ""));
+	return `<span class="scout-directory-actions"><a class="icon-button scout-edit-icon" href="#/scouts/${scoutRouteId}" aria-label="Edit ${scout.name}" title="Edit ${scout.name}">&#9998;</a><button class="icon-button remove-record-icon" type="button" data-delete-scout-record="${scoutRouteId}" aria-label="Remove ${scout.name}" title="Remove ${scout.name}">${renderTrashIcon()}</button></span>`;
+}
+function renderTrashIcon() {
+	return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-2 6h10l-.7 11H7.7L7 9Zm3 2v7h2v-7h-2Zm4 0v7h2v-7h-2Z" fill="currentColor"/></svg>`;
+}
+function renderAddScoutIcon() {
+	return `<button class="icon-button add-scout-icon" type="button" data-add-scout aria-label="Add new scout" title="Add new scout">
+<img src="${scoutOrgLogo}" alt="" aria-hidden="true" />
+</button>`;
 }
 function renderScoutDirectoryNameCell(scout, scoutLabel) {
 	const leaderIcon = scout.leadershipRole
@@ -886,6 +901,46 @@ function renderScoutDirectoryNameCell(scout, scoutLabel) {
 		: `<span class="scout-directory-leader-placeholder" aria-hidden="true">
 </span>`;
 	return `<span class="scout-directory-name">${leaderIcon}${renderScoutName(scout, { className: "text-link", newTab: false, label: scoutLabel })}</span>`;
+}
+function scoutDirectorySortHeader(key, label, ariaLabel = label) {
+	const active = scoutDirectorySort.key === key;
+	const direction = active ? scoutDirectorySort.direction : "none";
+	const indicator = active
+		? scoutDirectorySort.direction === "asc"
+			? "▲"
+			: "▼"
+		: "";
+	return `<button class="table-sort-button" type="button" data-scout-sort="${key}" aria-label="Sort scouts by ${ariaLabel}" aria-sort="${direction}"><span>${label}</span><span aria-hidden="true">${indicator}</span></button>`;
+}
+function compareTextValues(a, b) {
+	return String(a || "").localeCompare(String(b || ""), undefined, {
+		sensitivity: "base",
+		numeric: true,
+	});
+}
+function scoutDirectorySortValue(scout, key) {
+	if (key === "patrol") return getPatrolDisplayName(scout.patrol);
+	if (key === "rank") return scout.rank || "";
+	if (key === "linkedAdults") {
+		return scout.parents
+			.map((parent) => `${parent.relationship} ${parent.name}`)
+			.join(" ");
+	}
+	return `${getScoutLastName(scout)} ${getScoutFirstName(scout)} ${getScoutNickname(scout)}`;
+}
+function sortScoutDirectoryRows(items) {
+	const direction = scoutDirectorySort.direction === "desc" ? -1 : 1;
+	return [...items].sort((a, b) => {
+		const result = compareTextValues(
+			scoutDirectorySortValue(a, scoutDirectorySort.key),
+			scoutDirectorySortValue(b, scoutDirectorySort.key),
+		);
+		if (result !== 0) return result * direction;
+		return compareTextValues(
+			scoutDirectorySortValue(a, "name"),
+			scoutDirectorySortValue(b, "name"),
+		);
+	});
 }
 function buildPatrolBadge(label, accent, subtitle) {
 	return svgDataUri(
@@ -927,6 +982,193 @@ function getPatrolBadgeValue(patrol, badge = "") {
 }
 function canEditScouts() {
 	return canSeeOrgChart();
+}
+function nextScoutId() {
+	const used = new Set(scouts.map((scout) => scout.id));
+	let index = scouts.length + 1;
+	let id = `scout-${index}`;
+	while (used.has(id)) {
+		index += 1;
+		id = `scout-${index}`;
+	}
+	return id;
+}
+async function addNewScout() {
+	if (!canEditScouts()) return;
+	clearEditableError();
+	const id = nextScoutId();
+	const scout = normalizeScout({
+		id,
+		firstName: "New",
+		lastName: "Scout",
+		name: "New Scout",
+		gender: "not specified",
+		patrol: unassignedPatrolValue,
+		rank: "Scout",
+		leadershipRole: "",
+		avatar: defaultScoutAvatar,
+	});
+	scouts = [...scouts, scout];
+	rebuildDerivedData();
+	window.location.hash = `#/scouts/${id}`;
+	renderRoute();
+	try {
+		await saveScoutRecord(scout);
+		setScoutRecordSaveStatus("saved");
+	} catch (error) {
+		console.warn(error);
+		setScoutRecordSaveStatus("dirty");
+		setEditableError(
+			error,
+			"New scout opened, but could not be saved yet. Edit the record and try again.",
+		);
+	}
+}
+function syncScoutRecordFromEditor(scoutId) {
+	const scout = scouts.find((entry) => entry.id === scoutId);
+	if (!scout) return null;
+	const nextFirstName = document
+		.querySelector("[data-scout-edit-first-name]")
+		?.value.trim();
+	const nextLastName = document
+		.querySelector("[data-scout-edit-last-name]")
+		?.value.trim();
+	const nextNickname = document
+		.querySelector("[data-scout-edit-nickname]")
+		?.value.trim();
+	const nextGender = document
+		.querySelector("[data-scout-edit-gender]")
+		?.value.trim();
+	const nextRank = document
+		.querySelector("[data-scout-edit-rank]")
+		?.value.trim();
+	const nextPatrol =
+		document.querySelector("[data-scout-edit-patrol]")?.value ??
+		scout.patrol;
+	const requestedRole =
+		document.querySelector("[data-scout-edit-role]")?.value || "";
+	const nextRole =
+		!String(nextPatrol || "").trim() &&
+		isPatrolSpecificRole(requestedRole)
+			? ""
+			: requestedRole;
+	scout.firstName = nextFirstName || getScoutFirstName(scout);
+	scout.lastName = nextLastName || "";
+	scout.name = [scout.firstName, scout.lastName]
+		.filter(Boolean)
+		.join(" ");
+	scout.nickname = nextNickname || getDefaultScoutNickname(scout);
+	scout.gender = nextGender || "not specified";
+	scout.rank = nextRank || "Scout";
+	scout.patrol = nextPatrol;
+	scout.patrolBadge = getPatrolBadgeValue(
+		nextPatrol,
+		scout.patrolBadge,
+	);
+	scout.leadershipRole = nextRole;
+	return scout;
+}
+async function saveScoutRecordFromEditor(scoutId) {
+	if (scoutRecordAutosaveTimer) {
+		window.clearTimeout(scoutRecordAutosaveTimer);
+		scoutRecordAutosaveTimer = null;
+	}
+	if (!scoutId || !canEditScoutRecord(scoutId)) return false;
+	const scout = syncScoutRecordFromEditor(scoutId);
+	if (!scout) return false;
+	clearEditableError();
+	setScoutRecordSaveStatus("saving");
+	try {
+		await saveScoutRecord(scout);
+		setScoutRecordSaveStatus("saved");
+		rebuildDerivedData();
+		renderRoute();
+		return true;
+	} catch (error) {
+		setScoutRecordSaveStatus("dirty");
+		setEditableError(error, "Could not save this scout record.");
+		return false;
+	}
+}
+function queueScoutRecordAutosave(scoutId) {
+	if (!scoutId || !canEditScoutRecord(scoutId)) return;
+	setScoutRecordSaveStatus("dirty");
+	if (scoutRecordAutosaveTimer) {
+		window.clearTimeout(scoutRecordAutosaveTimer);
+	}
+	scoutRecordAutosaveTimer = window.setTimeout(async () => {
+		scoutRecordAutosaveTimer = null;
+		await saveScoutRecordFromEditor(scoutId);
+	}, detailRecordAutosaveDelay);
+}
+function syncAdultRecordFromEditor(adultId) {
+	const adult = adults.find((entry) => entry.id === adultId);
+	if (!adult) return null;
+	const nextName = document
+		.querySelector("[data-adult-edit-name]")
+		?.value.trim();
+	const nextEmail =
+		document.querySelector("[data-adult-edit-email]")?.value.trim() ||
+		`${slugifyName(nextName || adult.name)}@example.com`;
+	const nextHomePhone =
+		document.querySelector("[data-adult-edit-home-phone]")?.value.trim() ||
+		"";
+	const nextCellPhone =
+		document.querySelector("[data-adult-edit-cell-phone]")?.value.trim() ||
+		"";
+	if (nextName) {
+		adult.name = nextName;
+	}
+	adult.email = nextEmail;
+	adult.homePhone = nextHomePhone;
+	adult.cellPhone = nextCellPhone;
+	return adult;
+}
+async function saveAdultRecordFromEditor(adultId) {
+	if (adultRecordAutosaveTimer) {
+		window.clearTimeout(adultRecordAutosaveTimer);
+		adultRecordAutosaveTimer = null;
+	}
+	if (!adultId || !canSeeOrgChart()) return false;
+	const adult = syncAdultRecordFromEditor(adultId);
+	if (!adult) return false;
+	clearEditableError();
+	setAdultRecordSaveStatus("saving");
+	try {
+		await saveAdultRecord(adult);
+		const nextRole =
+			document.querySelector("[data-adult-edit-role]")?.value || "";
+		adultLeaders = adultLeaders.filter(
+			(leader) => leader.adultId !== adultId,
+		);
+		if (nextRole) {
+			adultLeaders.push({
+				adultId,
+				name: adult.name || "Unknown adult",
+				role: nextRole,
+			});
+		}
+		await saveAdultLeaders();
+		setAdultRecordSaveStatus("saved");
+		rebuildDerivedData();
+		renderRoute();
+		return true;
+	} catch (error) {
+		setAdultRecordSaveStatus("dirty");
+		setEditableError(error, "Could not save this adult record.");
+		return false;
+	}
+}
+function queueAdultRecordAutosave(adultId) {
+	if (!adultId || !canSeeOrgChart()) return;
+	setAdultRecordSaveStatus("dirty");
+	if (adultRecordAutosaveTimer) {
+		window.clearTimeout(adultRecordAutosaveTimer);
+	}
+	adultRecordAutosaveTimer = window.setTimeout(async () => {
+		adultRecordAutosaveTimer = null;
+		await saveAdultRecordFromEditor(adultId);
+	}, detailRecordAutosaveDelay);
 }
 function getActiveScoutId() {
 	return (
@@ -1055,6 +1297,28 @@ function applyTitleAttributes(root = document.body) {
 			element.setAttribute("title", title);
 		}
 	});
+}
+function formatErrorMessage(error, fallback = "The change could not be saved.") {
+	return error?.message || fallback;
+}
+function setEditableError(error, fallback) {
+	editableErrorMessage = formatErrorMessage(error, fallback);
+	const target = document.querySelector("[data-editable-error]");
+	if (target) {
+		target.hidden = false;
+		target.textContent = editableErrorMessage;
+	}
+}
+function clearEditableError() {
+	editableErrorMessage = "";
+	const target = document.querySelector("[data-editable-error]");
+	if (target) {
+		target.hidden = true;
+		target.textContent = "";
+	}
+}
+function renderEditableError() {
+	return `<div class="editable-error" data-editable-error role="alert"${editableErrorMessage ? "" : " hidden"}>${editableErrorMessage}</div>`;
 }
 function rebuildDerivedData() {
 	roster = scouts.map((scout) => {
@@ -1644,6 +1908,14 @@ function getAdultLeaderAssignment(adultId) {
 		adultLeaders.find((leader) => leader.adultId === adultId) || null
 	);
 }
+function getAdultRouteId(hash = window.location.hash || "") {
+	const rawId = String(hash).replace("#/adults/", "").split("?")[0];
+	try {
+		return decodeURIComponent(rawId);
+	} catch (error) {
+		return rawId;
+	}
+}
 function getScoutsForAdult(adult) {
 	const linkedScoutIds = new Set(
 		adultScoutRelationships
@@ -1679,6 +1951,7 @@ function authHeaders(extra = {}) {
 }
 function assignedRoles() {
 	return new Set([
+		...(currentActor?.roles || []),
 		...(currentActor?.globalRoles || []),
 		...(currentActor?.unitRoles || []).map(
 			(assignment) => assignment.role,
@@ -1729,19 +2002,80 @@ async function postJson(url, payload) {
 		headers: authHeaders({ "Content-Type": "application/json" }),
 		body: JSON.stringify(payload),
 	});
+	const responseText = await response.text().catch(() => "");
+	const responseMessage = (() => {
+		if (!responseText) return "";
+		try {
+			const parsed = JSON.parse(responseText);
+			return parsed.error || parsed.message || responseText;
+		} catch (error) {
+			return responseText;
+		}
+	})();
 	if (response.status === 401 || response.status === 403) {
 		await loadData();
 		renderAccessDenied();
-		throw new Error(`Request denied for ${url}`);
+		throw new Error(
+			responseMessage || `Request denied for ${url}`,
+		);
 	}
 	if (!response.ok) {
-		throw new Error(`Request failed for ${url}`);
+		throw new Error(
+			responseMessage ||
+				`Request failed for ${url} (${response.status})`,
+		);
 	}
 }
 async function saveScouts() {
-	await postJson("/api/scouts", {
-		scouts: scouts.map(serializeScout),
+	for (const scout of scouts.map(serializeScout)) {
+		if (!String(scout.id || "").trim()) {
+			throw new Error("Each scout must have an id before saving.");
+		}
+		await postJson("/api/scouts", { scout });
+	}
+}
+async function saveScoutRecord(scout) {
+	const serializedScout = serializeScout(scout);
+	if (!String(serializedScout.id || "").trim()) {
+		throw new Error("This scout must have an id before saving.");
+	}
+	await postJson("/api/scouts", { scout: serializedScout });
+}
+async function deleteScoutRecord(scoutId) {
+	const response = await fetch(`/api/scouts/${encodeURIComponent(scoutId)}`, {
+		method: "DELETE",
+		headers: authHeaders(),
 	});
+	const responseText = await response.text().catch(() => "");
+	if (response.status === 401 || response.status === 403) {
+		await loadData();
+		renderAccessDenied();
+		throw new Error(responseText || "Request denied.");
+	}
+	if (!response.ok) {
+		throw new Error(responseText || "Could not remove this scout.");
+	}
+}
+async function saveAdultRecord(adult) {
+	if (!adult?.id) {
+		throw new Error("This adult must have an id before saving.");
+	}
+	await postJson("/api/adults", { adult: serializeAdult(adult) });
+}
+async function deleteAdultRecord(adultId) {
+	const response = await fetch(`/api/adults/${encodeURIComponent(adultId)}`, {
+		method: "DELETE",
+		headers: authHeaders(),
+	});
+	const responseText = await response.text().catch(() => "");
+	if (response.status === 401 || response.status === 403) {
+		await loadData();
+		renderAccessDenied();
+		throw new Error(responseText || "Request denied.");
+	}
+	if (!response.ok) {
+		throw new Error(responseText || "Could not remove this adult.");
+	}
 }
 async function savePatrols() {
 	storePatrolsSnapshot();
@@ -1933,6 +2267,16 @@ const modeSelect = {
 };
 const canSeeOrgChart = () =>
 	hasAnyRole(["adult_leader", "administrator"]);
+const canManageAdultScoutRelationships = () =>
+	hasAnyRole(["adult_leader", "administrator"]);
+function formatDetectedAccess() {
+	if (!currentActor?.authenticated) return "not signed in";
+	const roles = [...assignedRoles()].filter((role) => role !== "public");
+	return roles.length ? roles.join(", ") : "signed in with no troop role";
+}
+function adultLeaderAccessMessage(pageName = "this page") {
+	return `${pageName} is restricted to adult leaders and administrators. This session is currently detected as ${formatDetectedAccess()}.`;
+}
 function isProtectedRoute(hash = window.location.hash || "#/") {
 	return (
 		hash.startsWith("#/scribe/") ||
@@ -2090,6 +2434,7 @@ function renderScoutsRoute() {
 </div>
 <div class="directory-tools">
 <div class="scribe-actions">
+${renderAddScoutIcon()}
 <a class="button secondary" href="#/patrols">Manage patrols</a>
 <a class="button secondary" href="#/org-chart/edit-scouts">Edit scout org chart</a>
 </div>
@@ -2104,15 +2449,14 @@ function renderScoutsRoute() {
 <table class="data-table scout-directory-table" data-scout-filter-scope>
 <thead>
 <tr>
-<th aria-label="Actions">
-</th>
-<th>Scout</th>
-<th>Patrol</th>
-<th>Rank</th>
-<th>Linked adults</th>
+<th>${scoutDirectorySortHeader("action", "Edit", "edit action")}</th>
+<th>${scoutDirectorySortHeader("name", "Scout")}</th>
+<th>${scoutDirectorySortHeader("patrol", "Patrol")}</th>
+<th>${scoutDirectorySortHeader("rank", "Rank")}</th>
+<th>${scoutDirectorySortHeader("linkedAdults", "Linked adults")}</th>
 </tr>
 </thead>
-<tbody>${sortScoutsByRankWithinPatrol(roster)
+<tbody>${sortScoutDirectoryRows(roster)
 		.map((scout) => {
 			const patrolName = getPatrolDisplayName(scout.patrol);
 			const scoutLabel = getScoutDirectoryName(scout);
@@ -2182,45 +2526,7 @@ function renderDashboard(mode) {
 	const adultScoutRosterSection = canSeeOrgChart()
 		? renderAdultScoutRosterPanel()
 		: "";
-	const parentEventGroups =
-		mode === "parent" ? getParentDashboardEventGroups() : null;
-	const eventPreviewSection =
-		mode === "parent"
-			? `<section class="section">
-<div class="section-heading">
-<div>
-<p class="eyebrow">Events</p>
-<h2>Event detail preview</h2>
-</div>
-<p class="section-copy">${parentEventGroups?.linkedScouts?.length ? "Recent and upcoming events for the scouts linked to this parent view." : "Link a scout to this parent to show family-relevant events here."}</p>
-</div>
-<div class="feature-grid">
-<div class="feature-column">
-<article class="panel">
-<div class="panel-heading">
-<h3>Last three weeks</h3>
-<p>Up to two recent events tied to your registered scouts.</p>
-</div>${parentEventGroups?.recent?.length ? `<div class="event-grid parent-event-grid">${parentEventGroups.recent.map(({ event, registeredScouts }) => renderParentEventCard(event, registeredScouts)).join("")}</div>` : `<p class="event-description">No linked-scout events were found in the last three weeks.</p>`}</article>
-</div>
-<div class="feature-column">
-<article class="panel">
-<div class="panel-heading">
-<h3>Next eight weeks</h3>
-<p>Upcoming events for your linked scouts, with each registered child shown on the card.</p>
-</div>${parentEventGroups?.upcoming?.length ? `<div class="event-grid parent-event-grid">${parentEventGroups.upcoming.map(({ event, registeredScouts }) => renderParentEventCard(event, registeredScouts)).join("")}</div>` : `<p class="event-description">No linked-scout events were found in the next eight weeks.</p>`}</article>
-</div>
-</div>
-</section>`
-			: `<section class="section">
-<div class="section-heading">
-<div>
-<p class="eyebrow">Events</p>
-<h2>Event detail preview</h2>
-</div>
-<p class="section-copy">Each event includes a direct route to richer details.</p>
-</div>
-<div class="event-grid">${getEventDetailPreviewEvents().map(renderEventCard).join("")}</div>
-</section>`;
+	const eventPreviewSection = renderTroopCalendarHighlightsSection();
 	app.innerHTML = `${topNav()}<section class="dashboard-banner">
 <div>
 <p class="eyebrow">${config.eyebrow}</p>
@@ -2274,6 +2580,7 @@ function renderDashboard(mode) {
 </div>
 </div>
 </article>${canSeeOrgChart() ? renderLeadershipSummary() : ""}${scribePanel}</section>${eventPreviewSection}${adultScoutRosterSection}`;
+	requestUpcomingScrollerCenter();
 }
 function renderScribeIndex() {
 	if (canSeeOrgChart()) {
@@ -2748,7 +3055,7 @@ function renderAdultOrgChartEditor() {
 <th>Remove</th>
 </tr>
 </thead>
-<tbody>${adultLeaders.map((leader, index) => `<tr><td>${renderAdultLeaderLink(leader)}</td><td><select data-adult-role-index="${index}" aria-label="Change role for ${leader.name}">${adultRoleOptions.map((role) => `<option value="${role}"${role === leader.role ? " selected" : ""}>${role}</option>`).join("")}</select></td><td><button class="icon-button" data-remove-adult-index="${index}" type="button" aria-label="Remove ${leader.name} from adult leaders">&times;</button></td></tr>`).join("")}${
+<tbody>${adultLeaders.map((leader, index) => `<tr><td>${renderAdultLeaderLink(leader)}</td><td><select data-adult-role-index="${index}" aria-label="Change role for ${leader.name}">${adultRoleOptions.map((role) => `<option value="${role}"${role === leader.role ? " selected" : ""}>${role}</option>`).join("")}</select></td><td><button class="icon-button remove-record-icon" data-remove-adult-index="${index}" type="button" aria-label="Remove ${leader.name} from adult leaders" title="Remove ${leader.name} from adult leaders">${renderTrashIcon()}</button></td></tr>`).join("")}${
 		showAddAdultRow
 			? `<tr><td><span class="leader-identity"><img class="leader-emblem" src="${scoutOrgLogo}" alt="Scout.org logo" /><input type="text" data-add-adult-input list="available-adult-options" placeholder="Start typing an adult name" aria-label="Choose or enter adult leader" /><datalist id="available-adult-options">${availableAdults
 					.map(
@@ -2819,7 +3126,7 @@ function renderAdultOrgChartEditor() {
 }
 function renderAdultsRoute(routeLabel = "/adults") {
 	if (!canSeeOrgChart()) {
-		return renderAccessDenied();
+		return renderAccessDenied(adultLeaderAccessMessage("Adult records"));
 	}
 	const sortedAdults = getSavedAdultPeople();
 	app.innerHTML = `${topNav()}<section class="dashboard-banner">
@@ -2847,6 +3154,7 @@ function renderAdultsRoute(routeLabel = "/adults") {
 <div class="panel-heading">
 <h3>${sortedAdults.length} adult records</h3>
 <p>Open any adult to edit contact information, linked scouts, and leadership assignment.</p>
+${renderEditableError()}
 </div>
 <div class="table-wrap">
 <table class="data-table adult-directory-table">
@@ -2871,7 +3179,8 @@ function renderAdultsRoute(routeLabel = "/adults") {
 				.filter(([phone]) => phone)
 				.map(([phone, label]) => `${phone} ${label}`)
 				.join(" ");
-			return `<tr><td>${renderAdultDirectoryActionCell(adult, leaderAssignment)}</td><td><a class="text-link" href="#/adults/${adult.id}">${adult.name}</a></td><td><div class="contact-stack"><span>${adult.email || "-"}</span><span>${phoneNumbers || "-"}</span></div></td><td>${leaderAssignment?.role || "Not assigned"}</td><td>${linkedScouts.length ? `<div class="adult-children-list compact">${linkedScouts.map((scout) => `<span class="child-chip">${renderScoutName(scout, { className: "text-link" })}</span>`).join("")}</div>` : "No linked scouts"}</td></tr>`;
+			const adultRouteId = encodeURIComponent(String(adult.id || ""));
+			return `<tr><td>${renderAdultDirectoryActionCell(adult, leaderAssignment)}</td><td><a class="text-link" href="#/adults/${adultRouteId}" data-edit-adult="${adultRouteId}">${adult.name}</a></td><td><div class="contact-stack"><span>${adult.email || "-"}</span><span>${phoneNumbers || "-"}</span></div></td><td>${leaderAssignment?.role || "Not assigned"}</td><td>${linkedScouts.length ? `<div class="adult-children-list compact">${linkedScouts.map((scout) => `<span class="child-chip">${renderScoutName(scout, { className: "text-link" })}</span>`).join("")}</div>` : "No linked scouts"}</td></tr>`;
 		})
 		.join("")}</tbody>
 </table>
@@ -2893,7 +3202,7 @@ function renderAdultRecordEditor(adultId) {
 <div>
 <p class="eyebrow">Adult record</p>
 <h2>${adult.name}</h2>
-<p class="intro compact">Update the adult record here. Changes save back to the master adults list when a field loses focus.</p>
+<p class="intro compact">Update the adult record here. Changes save back to the master adults list 2 seconds after the last change.</p>
 </div>
 <div class="status-chip">
 <span>Route</span>
@@ -2908,6 +3217,10 @@ function renderAdultRecordEditor(adultId) {
 <span class="record-save-status" data-adult-save-status="${adultRecordSaveStatus}">${adultRecordStatusLabel()}</span>
 </h3>
 <p>This record is linked to leadership assignments, parent/guardian references, and future troop access decisions.</p>
+${renderEditableError()}
+</div>
+<div class="editor-action-row">
+<button class="button primary" type="button" data-save-adult-record="${adult.id}">Save adult</button>
 </div>
 <div class="table-wrap">
 <table class="data-table compact">
@@ -2948,7 +3261,7 @@ function renderAdultRecordEditor(adultId) {
 </tr>
 <tr>
 <td>Children</td>
-<td>${linkedScouts.length ? `<div class="adult-children-list">${linkedScouts.map((scout) => `<span class="child-chip">${renderScoutName(scout)}${canSeeOrgChart() ? ` <button class="icon-button mini" data-remove-child-scout="${scout.id}" type="button" aria-label="Remove ${scout.name} from ${adult.name}'s children">&times;</button>` : ""}</span>`).join("")}</div>` : `No linked scouts`}${canSeeOrgChart() ? `<div class="adult-child-add"><select data-add-child-scout aria-label="Select scout to add as child"><option value="">Select scout</option>${availableScouts.map((scout) => `<option value="${scout.id}">${scout.name}</option>`).join("")}</select><button class="icon-button add" data-save-child-link type="button" aria-label="Add selected scout as child">+</button></div>` : ""}</td>
+<td>${linkedScouts.length ? `<div class="adult-children-list">${linkedScouts.map((scout) => `<span class="child-chip">${renderScoutName(scout)}${canManageAdultScoutRelationships() ? ` <button class="icon-button mini" data-remove-child-scout="${scout.id}" type="button" aria-label="Remove ${scout.name} from ${adult.name}'s children">&times;</button>` : ""}</span>`).join("")}</div>` : `No linked scouts`}${canManageAdultScoutRelationships() ? `<div class="adult-child-add"><select data-add-child-scout aria-label="Select scout to add as child"><option value="">Select scout</option>${availableScouts.map((scout) => `<option value="${scout.id}">${scout.name}</option>`).join("")}</select><button class="icon-button add" data-save-child-link type="button" aria-label="Add selected scout as child">+</button></div>` : `<p class="section-copy compact">Only adult leaders or administrators can change linked scouts.</p>`}</td>
 </tr>
 </tbody>
 </table>
@@ -2976,7 +3289,7 @@ function renderHolidayRows() {
 <td>${holiday.note || "-"}</td>
 <td>
 <div class="table-action-row">
-<a class="text-link" href="#/holidays/${holiday.id}">View</a>${canSeeOrgChart() ? `<button class="icon-button mini" data-delete-holiday="${holiday.id}" type="button" aria-label="Remove ${holiday.name}">&times;</button>` : ""}</div>
+<a class="text-link" href="#/holidays/${holiday.id}">View</a>${canSeeOrgChart() ? `<button class="icon-button mini remove-record-icon" data-delete-holiday="${holiday.id}" type="button" aria-label="Remove ${holiday.name}" title="Remove ${holiday.name}">${renderTrashIcon()}</button>` : ""}</div>
 </td>
 </tr>`,
 		)
@@ -3183,7 +3496,7 @@ function renderScoutRecordEditor(scoutId) {
 <div>
 <p class="eyebrow">Scout record</p>
 <h2>${scout.name}</h2>
-<p class="intro compact">${editorLabel} Text fields and selections save on blur.</p>
+<p class="intro compact">${editorLabel} Text fields and selections save 2 seconds after the last change.</p>
 </div>
 <div class="status-chip">
 <span>Route</span>
@@ -3198,29 +3511,19 @@ function renderScoutRecordEditor(scoutId) {
 <span class="record-save-status" data-scout-save-status="${scoutRecordSaveStatus}">${scoutRecordStatusLabel()}</span>
 </h3>
 <p>Parents and guardians shown here are sourced from the separate adult-scout relationship file.</p>
+${renderEditableError()}
 </div>
-<div class="table-wrap">
-<table class="data-table compact">
-<thead>
-<tr>
-<th>Field</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Avatar</td>
-<td>
+<div class="scout-detail-form">
+<div class="scout-detail-avatar-row">
+<span class="scout-detail-label">Avatar</span>
 <label class="scout-avatar-editor" aria-label="Change avatar for ${scout.name}">
 <img class="scout-avatar large" data-scout-avatar-preview src="${getScoutAvatar(scout)}" alt="${scout.name} avatar preview" />
 <span>Change avatar</span>
 <input class="visually-hidden-file-input" type="file" data-scout-avatar-upload accept="image/*" />
 </label>
-</td>
-</tr>
-<tr>
-<td>Name</td>
-<td>
+</div>
+<fieldset class="scout-detail-group scout-detail-group-name">
+<legend>Name</legend>
 <div class="scout-name-editor">
 <label>
 <span>First name</span>
@@ -3230,38 +3533,29 @@ function renderScoutRecordEditor(scoutId) {
 <span>Last name</span>
 <input type="text" data-scout-edit-last-name value="${getScoutLastName(scout)}" aria-label="Scout last name" />
 </label>
-</div>
-</td>
-</tr>
-<tr>
-<td>Nickname</td>
-<td>
+<label>
+<span>Nickname</span>
 <input type="text" data-scout-edit-nickname value="${getScoutNickname(scout)}" aria-label="Scout nickname" />
-</td>
-</tr>
-<tr>
-<td>Gender</td>
-<td>
+</label>
+</div>
+</fieldset>
+<div class="scout-detail-grid">
+<label>
+<span>Gender</span>
 <select data-scout-edit-gender aria-label="Scout gender">
 <option value="male"${scout.gender === "male" ? " selected" : ""}>male</option>
 <option value="female"${scout.gender === "female" ? " selected" : ""}>female</option>
 <option value="not specified"${scout.gender === "not specified" ? " selected" : ""}>not specified</option>
 </select>
-</td>
-</tr>
-<tr>
-<td>Rank</td>
-<td>
+</label>
+<label>
+<span>Rank</span>
 <select data-scout-edit-rank aria-label="Scout rank">${scoutRankOptions.map((rank) => `<option value="${rank}"${rank === scout.rank ? " selected" : ""}>${rank}</option>`).join("")}</select>
-</td>
-</tr>
-<tr>
-<td>Parents / guardians</td>
-<td>${scout.parents.length ? scout.parents.map((parent) => `<a class="text-link" href="#/adults/${parent.adultId}" target="_blank" rel="noreferrer">${parent.relationship}: ${parent.name}</a>`).join("<br />") : "No linked adults"}</td>
-</tr>
-<tr>
-<td>Patrol</td>
-<td>
+</label>
+</div>
+<div class="scout-detail-grid scout-detail-grid-wide">
+<label>
+<span>Patrol</span>
 <div class="scout-patrol-editor">
 <select data-scout-edit-patrol aria-label="Scout patrol">${getPatrolNameList(
 		[],
@@ -3274,16 +3568,16 @@ function renderScoutRecordEditor(scoutId) {
 		.join("")}</select>
 <img class="leader-emblem scout-patrol-badge-preview" data-scout-patrol-badge-preview src="${getPatrolBadgeImage(scout.patrol)}" alt="${getPatrolDisplayName(scout.patrol)} badge" />
 </div>
-</td>
-</tr>
-<tr>
-<td>Leadership position</td>
-<td>
+</label>
+<label>
+<span>Leadership position</span>
 <select data-scout-edit-role aria-label="Scout leadership position">${scoutLeadershipOptions.map((role) => `<option value="${role}"${role === scout.leadershipRole ? " selected" : ""}>${role || "Not assigned"}</option>`).join("")}</select>
-</td>
-</tr>
-</tbody>
-</table>
+</label>
+</div>
+<div class="scout-detail-guardians">
+<span class="scout-detail-label">Parents / guardians</span>
+<div class="adult-children-list compact">${scout.parents.length ? scout.parents.map((parent) => `<span class="child-chip"><a class="text-link" href="#/adults/${parent.adultId}" target="_blank" rel="noreferrer">${parent.relationship}: ${parent.name}</a></span>`).join("") : `<span class="section-copy compact">No linked adults</span>`}</div>
+</div>
 </div>
 </div>
 </section>`;
@@ -3307,8 +3601,8 @@ function renderFriendlyAccessMessage(
 </div>
 </section>`;
 }
-function renderAccessDenied() {
-	renderFriendlyAccessMessage();
+function renderAccessDenied(message) {
+	renderFriendlyAccessMessage(message);
 }
 function renderNotFound() {
 	app.innerHTML = `${topNav()}<section class="dashboard-banner">
@@ -3455,6 +3749,11 @@ function renderRoute() {
 		applyTitleAttributes();
 		return;
 	}
+	if (hash.startsWith("#/adults/")) {
+		renderAdultRecordEditor(getAdultRouteId(hash));
+		applyTitleAttributes();
+		return;
+	}
 	if (hash === "#/org-chart") {
 		renderOrgChart();
 		applyTitleAttributes();
@@ -3467,11 +3766,6 @@ function renderRoute() {
 	}
 	if (hash === "#/org-chart/edit-adults") {
 		renderAdultOrgChartEditor();
-		applyTitleAttributes();
-		return;
-	}
-	if (hash.startsWith("#/adults/")) {
-		renderAdultRecordEditor(hash.replace("#/adults/", ""));
 		applyTitleAttributes();
 		return;
 	}
@@ -3582,6 +3876,7 @@ document.addEventListener("submit", async (event) => {
 		};
 		setAppLoading("Loading account");
 		await loadData();
+		await scoutsLibReady;
 		clearAppLoading();
 		renderRoute();
 	} finally {
@@ -3676,13 +3971,19 @@ document.addEventListener("change", async (event) => {
 		};
 		reservationToggle.disabled = true;
 		const previousChecked = !reservationToggle.checked;
-		const saved = await savePersonEventReservation(
-			currentEvent,
-			person,
-			reservationToggle.checked,
-		);
-		if (!saved) {
+		clearEditableError();
+		try {
+			await savePersonEventReservation(
+				currentEvent,
+				person,
+				reservationToggle.checked,
+			);
+		} catch (error) {
 			reservationToggle.checked = previousChecked;
+			setEditableError(
+				error,
+				"Could not update this reservation.",
+			);
 		}
 		reservationToggle.disabled = false;
 		renderRoute();
@@ -3707,7 +4008,7 @@ document.addEventListener("change", async (event) => {
 		}
 		setAppLoading("Loading reservations");
 		try {
-			await loadReservationRangeEvents();
+			await loadData();
 		} finally {
 			clearAppLoading();
 		}
@@ -3822,12 +4123,12 @@ window.addEventListener("hashchange", async () => {
 	const needsAsyncRouteLoad =
 		hash.startsWith("#/events/calendar") ||
 		Boolean(getEventDetailRouteId()) ||
-		(isReservationsRoute &&
-			reservationRouteHasExplicitRange() &&
-			currentActor?.authenticated);
+		(isReservationsRoute && currentActor?.authenticated);
 	if (needsAsyncRouteLoad) setAppLoading("Loading page");
 	try {
-		if (hash.startsWith("#/events/calendar")) {
+		if (isReservationsRoute && currentActor?.authenticated) {
+			await loadData();
+		} else if (hash.startsWith("#/events/calendar")) {
 			try {
 				await loadCalendarMonthEvents(getSelectedEventMonth());
 			} catch (error) {
@@ -3837,17 +4138,6 @@ window.addEventListener("hashchange", async () => {
 		const detailEventId = getEventDetailRouteId();
 		if (detailEventId) {
 			await loadEventRouteData(detailEventId);
-		}
-		if (
-			isReservationsRoute &&
-			reservationRouteHasExplicitRange() &&
-			currentActor?.authenticated
-		) {
-			try {
-				await loadReservationRangeEvents();
-			} catch (error) {
-				console.warn(error);
-			}
 		}
 	} finally {
 		if (needsAsyncRouteLoad) clearAppLoading();
@@ -3862,6 +4152,147 @@ document.addEventListener("click", async (event) => {
 	if (openEventCard && !shouldSkipEventCardNavigation(event.target)) {
 		window.location.hash =
 			openEventCard.dataset.openEventCard || "#/events";
+		return;
+	}
+
+	const scoutSortButton = event.target.closest("[data-scout-sort]");
+	if (scoutSortButton) {
+		const key = scoutSortButton.dataset.scoutSort;
+		scoutDirectorySort =
+			scoutDirectorySort.key === key
+				? {
+						key,
+						direction:
+							scoutDirectorySort.direction === "asc"
+								? "desc"
+								: "asc",
+					}
+				: { key, direction: "asc" };
+		renderRoute();
+		return;
+	}
+
+	const addScoutButton = event.target.closest("[data-add-scout]");
+	if (addScoutButton) {
+		await addNewScout();
+		return;
+	}
+
+	const deleteScoutButton = event.target.closest(
+		"[data-delete-scout-record]",
+	);
+	if (deleteScoutButton) {
+		if (!canEditScouts()) return;
+		const scoutId = decodeURIComponent(
+			deleteScoutButton.dataset.deleteScoutRecord || "",
+		);
+		const scout = scouts.find((entry) => entry.id === scoutId);
+		if (!scout) return;
+		const confirmed = window.confirm(
+			`Remove ${scout.name}? This also removes linked adult and reservation records for this scout.`,
+		);
+		if (!confirmed) return;
+		clearEditableError();
+		const previousScouts = [...scouts];
+		const previousAdultScoutRelationships = [
+			...adultScoutRelationships,
+		];
+		const previousEvents = [...events];
+		try {
+			await deleteScoutRecord(scoutId);
+			scouts = scouts.filter((entry) => entry.id !== scoutId);
+			adultScoutRelationships =
+				adultScoutRelationships.filter(
+					(relationship) => relationship.scoutId !== scoutId,
+				);
+			events = events.map((item) => ({
+				...item,
+				registrations: (item.registrations || []).filter(
+					(registration) => registration.personId !== scoutId,
+				),
+			}));
+			rebuildDerivedData();
+			if ((window.location.hash || "") === `#/scouts/${scoutId}`) {
+				window.location.hash = "#/scouts";
+			}
+			renderRoute();
+		} catch (error) {
+			scouts = previousScouts;
+			adultScoutRelationships = previousAdultScoutRelationships;
+			events = previousEvents;
+			setEditableError(error, "Could not remove this scout.");
+		}
+		return;
+	}
+
+	const editAdultLink = event.target.closest("[data-edit-adult]");
+	if (editAdultLink) {
+		event.preventDefault();
+		window.location.hash = `#/adults/${editAdultLink.dataset.editAdult}`;
+		renderRoute();
+		return;
+	}
+
+	const deleteAdultButton = event.target.closest(
+		"[data-delete-adult-record]",
+	);
+	if (deleteAdultButton) {
+		if (!canSeeOrgChart()) return;
+		const adultId = decodeURIComponent(
+			deleteAdultButton.dataset.deleteAdultRecord || "",
+		);
+		const adult = adults.find((entry) => entry.id === adultId);
+		if (!adult) return;
+		const confirmed = window.confirm(
+			`Remove ${adult.name}? This also removes their adult leader and linked scout records.`,
+		);
+		if (!confirmed) return;
+		clearEditableError();
+		const previousAdults = [...adults];
+		const previousAdultLeaders = [...adultLeaders];
+		const previousAdultScoutRelationships = [
+			...adultScoutRelationships,
+		];
+		try {
+			await deleteAdultRecord(adultId);
+			adults = adults.filter((entry) => entry.id !== adultId);
+			adultLeaders = adultLeaders.filter(
+				(leader) => leader.adultId !== adultId,
+			);
+			adultScoutRelationships = adultScoutRelationships.filter(
+				(relationship) => relationship.adultId !== adultId,
+			);
+			rebuildDerivedData();
+			if (getAdultRouteId() === adultId) {
+				window.location.hash = "#/adults";
+			}
+			renderRoute();
+		} catch (error) {
+			adults = previousAdults;
+			adultLeaders = previousAdultLeaders;
+			adultScoutRelationships = previousAdultScoutRelationships;
+			setEditableError(error, "Could not remove this adult.");
+		}
+		return;
+	}
+
+	const saveScoutButton = event.target.closest(
+		"[data-save-scout-record]",
+	);
+	if (saveScoutButton) {
+		await saveScoutRecordFromEditor(
+			saveScoutButton.dataset.saveScoutRecord,
+		);
+		return;
+	}
+
+	const saveAdultButton = event.target.closest(
+		"[data-save-adult-record]",
+	);
+	if (saveAdultButton) {
+		await saveAdultRecordFromEditor(
+			saveAdultButton.dataset.saveAdultRecord,
+		);
 		return;
 	}
 
@@ -4113,7 +4544,12 @@ document.addEventListener("click", async (event) => {
 			isPersonRegisteredForEvent(currentEvent, person)
 		)
 			return;
-		await savePersonEventReservation(currentEvent, person, true);
+		clearEditableError();
+		try {
+			await savePersonEventReservation(currentEvent, person, true);
+		} catch (error) {
+			setEditableError(error, "Could not update this registration.");
+		}
 		renderRoute();
 		return;
 	}
@@ -4317,11 +4753,27 @@ document.addEventListener("click", async (event) => {
 	);
 	if (deleteEventButton) {
 		if (!canSeeOrgChart()) return;
-		events = events.filter(
-			(item) => item.id !== deleteEventButton.dataset.deleteEvent,
+		const eventToDelete = events.find(
+			(item) => item.id === deleteEventButton.dataset.deleteEvent,
 		);
-		await saveEvents();
-		window.location.hash = "#/events";
+		const confirmed = window.confirm(
+			`Remove ${eventToDelete?.title || "this event"}?`,
+		);
+		if (!confirmed) return;
+		const previousEvents = [...events];
+		try {
+			clearEditableError();
+			events = events.filter(
+				(item) =>
+					item.id !== deleteEventButton.dataset.deleteEvent,
+			);
+			await saveEvents();
+			window.location.hash = "#/events";
+			renderRoute();
+		} catch (error) {
+			events = previousEvents;
+			setEditableError(error, "Could not remove this event.");
+		}
 		return;
 	}
 
@@ -4379,13 +4831,23 @@ document.addEventListener("click", async (event) => {
 		"[data-remove-adult-index]",
 	);
 	if (removeButton) {
-		adultLeaders.splice(
-			Number(removeButton.dataset.removeAdultIndex),
-			1,
-		);
-		await saveAdultLeaders();
-		rebuildDerivedData();
-		renderRoute();
+		clearEditableError();
+		const previousAdultLeaders = [...adultLeaders];
+		try {
+			adultLeaders.splice(
+				Number(removeButton.dataset.removeAdultIndex),
+				1,
+			);
+			await saveAdultLeaders();
+			rebuildDerivedData();
+			renderRoute();
+		} catch (error) {
+			adultLeaders = previousAdultLeaders;
+			setEditableError(
+				error,
+				"Could not remove this adult leader.",
+			);
+		}
 		return;
 	}
 
@@ -4413,7 +4875,10 @@ document.addEventListener("click", async (event) => {
 		)
 			return;
 
-		adults.push({
+		clearEditableError();
+		const previousAdults = [...adults];
+		try {
+			adults.push({
 			id: nextAdultId(),
 			name,
 			relationship: relationshipInput?.value || "Adult leader",
@@ -4422,26 +4887,35 @@ document.addEventListener("click", async (event) => {
 				`${slugifyName(name)}@example.com`,
 			homePhone: homePhoneInput?.value.trim() || "",
 			cellPhone: cellPhoneInput?.value.trim() || "",
-		});
-		await saveAdults();
-		rebuildDerivedData();
-		renderRoute();
+			});
+			await saveAdults();
+			rebuildDerivedData();
+			renderRoute();
+		} catch (error) {
+			adults = previousAdults;
+			setEditableError(error, "Could not save this adult.");
+		}
 	}
 
 	const removeChildButton = event.target.closest(
 		"[data-remove-child-scout]",
 	);
 	if (removeChildButton) {
-		const adultId = (window.location.hash || "").replace(
-			"#/adults/",
-			"",
-		);
+		if (!canManageAdultScoutRelationships()) {
+			setEditableError(
+				new Error("Only adult leaders or administrators can change linked scouts."),
+				"Could not update the linked scout list.",
+			);
+			return;
+		}
+		const adultId = getAdultRouteId();
 		const adult = adults.find((entry) => entry.id === adultId);
 		const scout = scouts.find(
 			(entry) =>
 				entry.id === removeChildButton.dataset.removeChildScout,
 		);
 		if (!adult || !scout) return;
+		clearEditableError();
 		setAdultRecordSaveStatus("dirty");
 		setAdultRecordSaveStatus("saving");
 		try {
@@ -4458,16 +4932,23 @@ document.addEventListener("click", async (event) => {
 			renderRoute();
 		} catch (error) {
 			setAdultRecordSaveStatus("dirty");
-			throw error;
+			setEditableError(
+				error,
+				"Could not update the linked scout list.",
+			);
 		}
 		return;
 	}
 
 	if (event.target.closest("[data-save-child-link]")) {
-		const adultId = (window.location.hash || "").replace(
-			"#/adults/",
-			"",
-		);
+		if (!canManageAdultScoutRelationships()) {
+			setEditableError(
+				new Error("Only adult leaders or administrators can change linked scouts."),
+				"Could not add the selected scout.",
+			);
+			return;
+		}
+		const adultId = getAdultRouteId();
 		const adult = adults.find((entry) => entry.id === adultId);
 		const scoutId = document.querySelector(
 			"[data-add-child-scout]",
@@ -4484,6 +4965,7 @@ document.addEventListener("click", async (event) => {
 			setAdultRecordSaveStatus("dirty");
 			setAdultRecordSaveStatus("saving");
 			try {
+				clearEditableError();
 				const currentCount = adultScoutRelationships.filter(
 					(relationship) => relationship.scoutId === scout.id,
 				).length;
@@ -4500,7 +4982,10 @@ document.addEventListener("click", async (event) => {
 				renderRoute();
 			} catch (error) {
 				setAdultRecordSaveStatus("dirty");
-				throw error;
+				setEditableError(
+					error,
+					"Could not add the selected scout.",
+				);
 			}
 		}
 	}
@@ -4523,7 +5008,7 @@ document.addEventListener("focusout", async (event) => {
 	if (eventEditorField) {
 		const eventId = getEventDetailRouteId();
 		if (!eventId || !canSeeOrgChart()) return;
-		await flushEventAutosave(eventId);
+		queueEventAutosave(eventId);
 		return;
 	}
 
@@ -4596,44 +5081,7 @@ document.addEventListener("focusout", async (event) => {
 		adultHomePhoneInput ||
 		adultCellPhoneInput
 	) {
-		const adultId = (window.location.hash || "").replace(
-			"#/adults/",
-			"",
-		);
-		const adult = adults.find((entry) => entry.id === adultId);
-		if (!adult) return;
-		setAdultRecordSaveStatus("saving");
-		try {
-			const nextName = document
-				.querySelector("[data-adult-edit-name]")
-				?.value.trim();
-			const nextEmail =
-				document
-					.querySelector("[data-adult-edit-email]")
-					?.value.trim() ||
-				`${slugifyName(nextName || adult.name)}@example.com`;
-			const nextHomePhone =
-				document
-					.querySelector("[data-adult-edit-home-phone]")
-					?.value.trim() || "";
-			const nextCellPhone =
-				document
-					.querySelector("[data-adult-edit-cell-phone]")
-					?.value.trim() || "";
-			if (nextName) {
-				adult.name = nextName;
-			}
-			adult.email = nextEmail;
-			adult.homePhone = nextHomePhone;
-			adult.cellPhone = nextCellPhone;
-			await saveAdults();
-			setAdultRecordSaveStatus("saved");
-			rebuildDerivedData();
-			renderRoute();
-		} catch (error) {
-			setAdultRecordSaveStatus("dirty");
-			throw error;
-		}
+		queueAdultRecordAutosave(getAdultRouteId());
 		return;
 	}
 
@@ -4641,33 +5089,7 @@ document.addEventListener("focusout", async (event) => {
 		"[data-adult-edit-role]",
 	);
 	if (adultRoleInput) {
-		const adultId = (window.location.hash || "").replace(
-			"#/adults/",
-			"",
-		);
-		if (!adultId || !canSeeOrgChart()) return;
-		setAdultRecordSaveStatus("saving");
-		try {
-			const nextRole = adultRoleInput.value;
-			adultLeaders = adultLeaders.filter(
-				(leader) => leader.adultId !== adultId,
-			);
-			if (nextRole) {
-				const adult = adults.find((entry) => entry.id === adultId);
-				adultLeaders.push({
-					adultId,
-					name: adult?.name || "Unknown adult",
-					role: nextRole,
-				});
-			}
-			await saveAdultLeaders();
-			setAdultRecordSaveStatus("saved");
-			rebuildDerivedData();
-			renderRoute();
-		} catch (error) {
-			setAdultRecordSaveStatus("dirty");
-			throw error;
-		}
+		queueAdultRecordAutosave(getAdultRouteId());
 		return;
 	}
 
@@ -4701,62 +5123,9 @@ document.addEventListener("focusout", async (event) => {
 		scoutPatrolInput ||
 		scoutRoleInput
 	) {
-		const scoutId = (window.location.hash || "").replace(
-			"#/scouts/",
-			"",
+		queueScoutRecordAutosave(
+			(window.location.hash || "").replace("#/scouts/", ""),
 		);
-		if (!scoutId || !canEditScoutRecord(scoutId)) return;
-		const scout = scouts.find((entry) => entry.id === scoutId);
-		if (!scout) return;
-		setScoutRecordSaveStatus("saving");
-		try {
-			const nextFirstName = document
-				.querySelector("[data-scout-edit-first-name]")
-				?.value.trim();
-			const nextLastName = document
-				.querySelector("[data-scout-edit-last-name]")
-				?.value.trim();
-			const nextNickname = document
-				.querySelector("[data-scout-edit-nickname]")
-				?.value.trim();
-			const nextGender = document
-				.querySelector("[data-scout-edit-gender]")
-				?.value.trim();
-			const nextRank = document
-				.querySelector("[data-scout-edit-rank]")
-				?.value.trim();
-			const nextPatrol =
-				document.querySelector("[data-scout-edit-patrol]")?.value ??
-				scout.patrol;
-			const requestedRole =
-				document.querySelector("[data-scout-edit-role]")?.value || "";
-			const nextRole =
-				!String(nextPatrol || "").trim() &&
-				isPatrolSpecificRole(requestedRole)
-					? ""
-					: requestedRole;
-			scout.firstName = nextFirstName || getScoutFirstName(scout);
-			scout.lastName = nextLastName || "";
-			scout.name = [scout.firstName, scout.lastName]
-				.filter(Boolean)
-				.join(" ");
-			scout.nickname = nextNickname || getDefaultScoutNickname(scout);
-			scout.gender = nextGender || "not specified";
-			scout.rank = nextRank || "Scout";
-			scout.patrol = nextPatrol;
-			scout.patrolBadge = getPatrolBadgeValue(
-				nextPatrol,
-				scout.patrolBadge,
-			);
-			scout.leadershipRole = nextRole;
-			await saveScouts();
-			setScoutRecordSaveStatus("saved");
-			rebuildDerivedData();
-			renderRoute();
-		} catch (error) {
-			setScoutRecordSaveStatus("dirty");
-			throw error;
-		}
 		return;
 	}
 });
@@ -4781,7 +5150,9 @@ document.addEventListener("input", (event) => {
 		"[data-scout-edit-first-name], [data-scout-edit-last-name], [data-scout-edit-nickname]",
 	);
 	if (scoutRecordInput) {
-		setScoutRecordSaveStatus("dirty");
+		queueScoutRecordAutosave(
+			(window.location.hash || "").replace("#/scouts/", ""),
+		);
 		return;
 	}
 
@@ -4789,7 +5160,7 @@ document.addEventListener("input", (event) => {
 		"[data-adult-edit-name], [data-adult-edit-email], [data-adult-edit-home-phone], [data-adult-edit-cell-phone]",
 	);
 	if (adultRecordInput) {
-		setAdultRecordSaveStatus("dirty");
+		queueAdultRecordAutosave(getAdultRouteId());
 		return;
 	}
 
@@ -4798,7 +5169,7 @@ document.addEventListener("input", (event) => {
 	);
 	if (!eventEditorField) return;
 	const eventId = getEventDetailRouteId();
-	queueEventAutosave(eventId, 500);
+	queueEventAutosave(eventId);
 });
 document.addEventListener("change", async (event) => {
 	const scoutPatrolSelect = event.target.closest(
@@ -4806,7 +5177,9 @@ document.addEventListener("change", async (event) => {
 	);
 	if (scoutPatrolSelect) {
 		setScoutPatrolBadgePreview(scoutPatrolSelect);
-		setScoutRecordSaveStatus("dirty");
+		queueScoutRecordAutosave(
+			(window.location.hash || "").replace("#/scouts/", ""),
+		);
 		return;
 	}
 
@@ -4814,14 +5187,21 @@ document.addEventListener("change", async (event) => {
 		"[data-scout-edit-gender], [data-scout-edit-rank], [data-scout-edit-role]",
 	);
 	if (scoutRecordSelect) {
-		setScoutRecordSaveStatus("dirty");
+		queueScoutRecordAutosave(
+			(window.location.hash || "").replace("#/scouts/", ""),
+		);
 		return;
 	}
 
-	const adultRecordSelect = event.target.closest(
-		"[data-adult-edit-role], [data-add-child-scout]",
-	);
+	const adultRecordSelect = event.target.closest("[data-adult-edit-role]");
 	if (adultRecordSelect) {
+		queueAdultRecordAutosave(getAdultRouteId());
+		return;
+	}
+
+	const adultChildSelect = event.target.closest("[data-add-child-scout]");
+	if (adultChildSelect) {
+		if (!canManageAdultScoutRelationships()) return;
 		setAdultRecordSaveStatus("dirty");
 		return;
 	}
@@ -4851,21 +5231,15 @@ document.addEventListener("change", async (event) => {
 	);
 	if (!eventEditorField) return;
 	const eventId = getEventDetailRouteId();
-	if (eventEditorField.matches("[data-event-edit-repeat-enabled]")) {
-		setEventEditorSaveStatus("dirty");
-		setEventEditorSaveStatus("saving");
-		try {
-			syncEventFromEditor(eventId);
-			await saveEvents();
-			setEventEditorSaveStatus("saved");
-			renderRoute();
-		} catch (error) {
-			setEventEditorSaveStatus("dirty");
-			throw error;
-		}
+	if (
+		eventEditorField.matches(
+			"[data-event-edit-repeat-enabled], [data-event-edit-registration-required]",
+		)
+	) {
+		queueEventAutosave(eventId);
 		return;
 	}
-	queueEventAutosave(eventId, 500);
+	queueEventAutosave(eventId);
 });
 document.addEventListener("change", async (event) => {
 	const scoutAvatarUploadInput = event.target.closest(
@@ -4892,6 +5266,7 @@ document.addEventListener("change", async (event) => {
 		setScoutRecordSaveStatus("dirty");
 		readFileAsDataUrl(file)
 			.then(async (item) => {
+				clearEditableError();
 				const scout = scouts.find((entry) => entry.id === scoutId);
 				if (!scout) return;
 				setScoutRecordSaveStatus("saving");
@@ -4903,7 +5278,13 @@ document.addEventListener("change", async (event) => {
 				rebuildDerivedData();
 				renderRoute();
 			})
-			.catch(() => setScoutRecordSaveStatus("dirty"));
+			.catch((error) => {
+				setScoutRecordSaveStatus("dirty");
+				setEditableError(
+					error,
+					"Could not save the scout avatar.",
+				);
+			});
 		return;
 	}
 
@@ -5001,7 +5382,7 @@ document.addEventListener("change", async (event) => {
 });
 setAppLoading("Loading page");
 loadData()
-	.then(() => {
+	.then(async () => {
 		rebuildDerivedData();
 		const detailEventId = getEventDetailRouteId();
 		if (detailEventId) {
@@ -5010,12 +5391,14 @@ loadData()
 				.catch((error) => {
 					console.warn(error);
 				})
-				.finally(() => {
+				.finally(async () => {
+					await scoutsLibReady;
 					clearAppLoading();
 					renderRoute();
 					hydrateLandingEventWindowMedia().catch(() => {});
 				});
 		}
+		await scoutsLibReady;
 		clearAppLoading();
 		renderRoute();
 		hydrateLandingEventWindowMedia().catch(() => {});

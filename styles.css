@@ -161,6 +161,18 @@ p {
 	background: rgba(50, 82, 61, 0.12);
 	border: 1px solid rgba(50, 82, 61, 0.22);
 }
+.editable-error {
+	margin-top: 12px;
+	padding: 10px 12px;
+	border: 1px solid rgba(161, 88, 73, 0.32);
+	border-radius: var(--radius-sm);
+	color: #8a3d2f;
+	background: rgba(161, 88, 73, 0.12);
+	font-weight: 700;
+}
+.editable-error[hidden] {
+	display: none;
+}
 .intro {
 	max-width: min(62ch, 100%);
 	margin: 10px 0 0;
@@ -956,6 +968,7 @@ textarea {
 	position: relative;
 	aspect-ratio: 4 / 3;
 	background: #d6dccf;
+	max-height: 250px;
 }
 .image-wrap img,
 .detail-image {
@@ -1205,6 +1218,14 @@ textarea {
 	text-transform: uppercase;
 	color: var(--forest);
 }
+.data-table tr.reservation-required-row td {
+	background: #435a48;
+	border-bottom-color: rgba(255, 255, 255, 0.18);
+	color: #fffaf0;
+}
+.data-table tr.reservation-required-row .text-link {
+	color: #fffaf0;
+}
 .data-table.compact {
 	min-width: 520px;
 }
@@ -1223,6 +1244,11 @@ textarea {
 	justify-content: flex-end;
 	gap: 10px;
 	margin-top: 18px;
+}
+.editor-action-row {
+	display: flex;
+	justify-content: flex-end;
+	margin: 14px 0 12px;
 }
 .contact-stack {
 	display: grid;
@@ -1244,6 +1270,12 @@ textarea {
 	gap: 8px;
 	white-space: nowrap;
 }
+.remove-record-icon svg {
+	display: block;
+	width: 17px;
+	height: 17px;
+	margin: auto;
+}
 .adult-directory-leader-icon {
 	width: 34px;
 	height: 34px;
@@ -1253,11 +1285,57 @@ textarea {
 .scout-edit-icon {
 	text-decoration: none;
 }
+.scout-directory-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	white-space: nowrap;
+}
+.add-scout-icon {
+	display: inline-grid;
+	place-items: center;
+	width: 44px;
+	height: 44px;
+	border-color: rgba(50, 82, 61, 0.22);
+	background: rgba(50, 82, 61, 0.1);
+	color: var(--forest-deep);
+}
+.add-scout-icon:hover {
+	background: rgba(50, 82, 61, 0.16);
+}
+.add-scout-icon img {
+	display: block;
+	width: 24px;
+	height: 24px;
+	border-radius: 999px;
+}
 .scout-directory-table th:first-child,
 .scout-directory-table td:first-child {
 	width: 48px;
 	white-space: nowrap;
 	text-align: center;
+}
+.table-sort-button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	padding: 0;
+	border: 0;
+	font: inherit;
+	font-weight: 800;
+	text-align: left;
+	color: inherit;
+	background: transparent;
+	cursor: pointer;
+}
+.table-sort-button:hover,
+.table-sort-button:focus-visible {
+	color: var(--forest);
+	outline: none;
+}
+.scout-directory-table th:first-child .table-sort-button {
+	justify-content: center;
 }
 .scout-directory-name {
 	display: inline-flex;
@@ -2128,9 +2206,60 @@ textarea {
 .scout-avatar-editor:hover .scout-avatar {
 	box-shadow: 0 0 0 4px rgba(50, 82, 61, 0.12);
 }
-.scout-name-editor {
+.scout-detail-form {
+	display: grid;
+	gap: 18px;
+}
+.scout-detail-avatar-row,
+.scout-detail-guardians {
+	display: grid;
+	grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+	gap: 14px;
+	align-items: center;
+	padding: 14px 0;
+	border-bottom: 1px solid rgba(50, 82, 61, 0.12);
+}
+.scout-detail-label,
+.scout-detail-group legend,
+.scout-detail-grid label > span {
+	color: var(--forest);
+	font-size: 0.78rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+.scout-detail-group {
+	min-width: 0;
+	margin: 0;
+	padding: 0 0 18px;
+	border: 0;
+	border-bottom: 1px solid rgba(50, 82, 61, 0.12);
+}
+.scout-detail-group legend {
+	padding: 0 0 10px;
+}
+.scout-detail-grid {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+	align-items: end;
+}
+.scout-detail-grid label {
+	display: grid;
+	gap: 6px;
+	min-width: 0;
+}
+.scout-detail-grid select {
+	width: 100%;
+	min-width: 0;
+}
+.scout-detail-grid-wide {
+	padding-bottom: 18px;
+	border-bottom: 1px solid rgba(50, 82, 61, 0.12);
+}
+.scout-name-editor {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 12px;
 }
 .scout-name-editor label {
@@ -2144,10 +2273,14 @@ textarea {
 	text-transform: uppercase;
 }
 .scout-patrol-editor {
-	display: inline-flex;
+	display: flex;
 	align-items: center;
 	gap: 12px;
-	flex-wrap: wrap;
+	min-width: 0;
+}
+.scout-patrol-editor select {
+	flex: 1 1 auto;
+	min-width: 0;
 }
 .scout-patrol-badge-preview {
 	width: 42px;
@@ -2201,6 +2334,21 @@ textarea {
 	flex-wrap: wrap;
 	gap: 10px;
 	align-items: center;
+}
+@media (max-width: 760px) {
+	.scout-detail-avatar-row,
+	.scout-detail-guardians,
+	.scout-detail-grid,
+	.scout-name-editor {
+		grid-template-columns: 1fr;
+	}
+	.scout-detail-avatar-row,
+	.scout-detail-guardians {
+		align-items: start;
+	}
+	.scout-avatar-editor {
+		width: 100%;
+	}
 }
 .patrol-badge-editor {
 	display: grid;

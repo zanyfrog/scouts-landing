@@ -1,5 +1,15 @@
 // Event, calendar, reservation, and event-gallery functionality used by app.js.
 // Loaded before app.js so these browser globals are available to the main router.
+let renderCalendarHighlightsSectionFromLib = null;
+const scoutsLibReady = import("./scouts-lib/index.js")
+	.then((module) => {
+		renderCalendarHighlightsSectionFromLib =
+			module.renderCalendarHighlightsSection;
+	})
+	.catch((error) => {
+		console.warn("Could not load scouts-lib calendar highlights.", error);
+	});
+
 // Normalizes location text and applies the shared Saint Joseph location alias.
 function normalizeEventLocation(value) {
 	const normalized = String(value || "").trim();
@@ -212,6 +222,19 @@ function normalizeEvent(record) {
 				.map(normalizeEventRegistration)
 				.filter((registration) => registration.personId)
 		: [];
+	const registrationRequired =
+		typeof record.registrationRequired === "boolean"
+			? record.registrationRequired
+			: ["true", "yes", "1", "t", "y"].includes(
+					String(
+						record.registrationRequired ??
+							record.registration_required ??
+							record.registerRequired ??
+							record.requiresRegistration ??
+							record.register ??
+							"",
+					).toLowerCase(),
+				);
 	return {
 		id: record.id,
 		title: record.title || "Untitled event",
@@ -231,6 +254,7 @@ function normalizeEvent(record) {
 			: image
 				? [normalizeGalleryItem({ src: image }, 0)]
 				: [],
+		registrationRequired,
 		registrations,
 		upcoming:
 			typeof record.upcoming === "boolean"
@@ -675,6 +699,12 @@ function syncEventFromEditor(eventId) {
 	event.detailNote =
 		document.querySelector("[data-event-edit-note]")?.value.trim() ||
 		event.detailNote;
+	const registrationRequiredInput = document.querySelector(
+		"[data-event-edit-registration-required]",
+	);
+	if (registrationRequiredInput) {
+		event.registrationRequired = registrationRequiredInput.checked;
+	}
 	event.upcoming =
 		(document.querySelector("[data-event-edit-upcoming]")?.value ||
 			String(event.upcoming)) === "true";
@@ -757,10 +787,24 @@ function syncEventFromEditor(eventId) {
 			event.image = event.gallery[0]?.src || "";
 		}
 	}
+	const syncedEvent = normalizeEvent(event);
+	const existingEventIndex = events.findIndex(
+		(item) => item.id === syncedEvent.id,
+	);
+	if (existingEventIndex >= 0) {
+		events = events.map((item, index) =>
+			index === existingEventIndex ? syncedEvent : item,
+		);
+	} else {
+		events = [...events, syncedEvent];
+	}
+	if (currentRouteEvent?.id === syncedEvent.id) {
+		currentRouteEvent = syncedEvent;
+	}
 	return event;
 }
 // Queues event autosave so edits can be saved after input settles.
-function queueEventAutosave(eventId, delay = 500) {
+function queueEventAutosave(eventId, delay = 2000) {
 	if (!eventId || !canSeeOrgChart()) {
 		return;
 	}
@@ -770,13 +814,18 @@ function queueEventAutosave(eventId, delay = 500) {
 	}
 	eventAutosaveTimer = window.setTimeout(async () => {
 		try {
+			if (typeof clearEditableError === "function") {
+				clearEditableError();
+			}
 			setEventEditorSaveStatus("saving");
 			syncEventFromEditor(eventId);
 			await saveEvents();
 			setEventEditorSaveStatus("saved");
 		} catch (error) {
 			setEventEditorSaveStatus("dirty");
-			throw error;
+			if (typeof setEditableError === "function") {
+				setEditableError(error, "Could not save this event.");
+			}
 		} finally {
 			eventAutosaveTimer = null;
 		}
@@ -793,12 +842,17 @@ async function flushEventAutosave(eventId) {
 	}
 	setEventEditorSaveStatus("saving");
 	try {
+		if (typeof clearEditableError === "function") {
+			clearEditableError();
+		}
 		syncEventFromEditor(eventId);
 		await saveEvents();
 		setEventEditorSaveStatus("saved");
 	} catch (error) {
 		setEventEditorSaveStatus("dirty");
-		throw error;
+		if (typeof setEditableError === "function") {
+			setEditableError(error, "Could not save this event.");
+		}
 	}
 }
 // Loads events into the event state used by the app.
@@ -2537,10 +2591,11 @@ function getRollingEventList(direction) {
 		.slice(0, 3);
 }
 // Gets landing event window for event routing, rendering, or filtering.
-function getLandingEventWindow() {
-	const rangeStart = getEventRangeStart();
-	const rangeEnd = getEventRangeEnd();
-	return getSortedEvents().filter((event) => {
+function getCalendarHighlightDataset(options = {}) {
+	const sourceEvents = options.sourceEvents || getSortedEvents();
+	const rangeStart = options.rangeStart || getEventRangeStart();
+	const rangeEnd = options.rangeEnd || getEventRangeEnd();
+	return [...sourceEvents].filter((event) => {
 		const start = parseEventStartDate(event);
 		const end = parseEventEndDate(event) || start;
 		if (!start || !end) {
@@ -2551,6 +2606,10 @@ function getLandingEventWindow() {
 			end.getTime() >= rangeStart.getTime()
 		);
 	});
+}
+// Gets landing event window for event routing, rendering, or filtering.
+function getLandingEventWindow() {
+	return getCalendarHighlightDataset();
 }
 // Gets current event index for event routing, rendering, or filtering.
 function getCurrentEventIndex(items) {
@@ -2605,6 +2664,20 @@ function scrollUpcomingEvents(direction) {
 		left: vertical ? 0 : direction * step,
 		top: vertical ? direction * step : 0,
 		behavior: "smooth",
+	});
+}
+// Renders the landing-page calendar highlight carousel.
+function renderTroopCalendarHighlightsSection() {
+	const landingEvents = getLandingEventWindow();
+	const currentEventIndex = getCurrentEventIndex(landingEvents);
+	const rangeLabel = `${getEventRangeStart().toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${getEventRangeEnd().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+	return renderCalendarHighlightsSectionFromLib({
+		events: landingEvents,
+		currentIndex: currentEventIndex,
+		title: "Troop calendar highlights",  // change title if want to have something different
+		eyebrow: "Current Events",
+		rangeLabel,
+		cardRenderer: renderLandingScrollerCard,
 	});
 }
 // Gets event detail preview events for event routing, rendering, or filtering.
@@ -2889,9 +2962,6 @@ function renderPublic() {
 	const nextEvent = upcoming[0] || null;
 	const nextEventLocation =
 		nextEvent?.location || nextEvent?.homeBase || "";
-	const landingEvents = getLandingEventWindow();
-	const currentEventIndex = getCurrentEventIndex(landingEvents);
-	const rangeLabel = `${getEventRangeStart().toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${getEventRangeEnd().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
 
 	app.innerHTML = `${topNav()}<section class="hero">
 <div class="hero-copy">
@@ -2905,31 +2975,7 @@ function renderPublic() {
 <p class="hero-event-meta">${nextEvent ? `${nextEvent.dateLabel} &bull; ${nextEvent.location}` : "Check back soon for the next troop event."}</p>
 <p>${nextEvent ? nextEvent.description : "The troop calendar is ready for the next event update."}</p>${nextEventLocation ? `<div class="hero-card-map"><div class="hero-card-map-frame"><iframe class="hero-card-map-embed" src="${mapUrlForLocation(nextEventLocation)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${nextEventLocation}"></iframe><a class="hero-card-map-overlay" href="${directionsUrlForLocation(nextEventLocation)}" target="_blank" rel="noreferrer" aria-label="Open directions to ${nextEventLocation}"><span>Directions</span></a></div><a class="hero-card-map-link" href="${directionsUrlForLocation(nextEventLocation)}" target="_blank" rel="noreferrer">Open directions to ${nextEventLocation}</a></div>` : ""}</div>
 </section>
-<section class="section upcoming-events-section" id="upcoming-events">
-<div class="section-heading centered-events-heading">
-<div>
-<p class="eyebrow">Upcoming Events</p>
-<h2>Troop calendar highlights</h2>
-</div>
-<p class="section-copy">${rangeLabel}</p>
-</div>
-<div class="upcoming-scroller-shell">
-<button class="event-scroll-button previous" type="button" data-event-scroll="-1" aria-label="Browse earlier events">&#8249;</button>
-<div class="upcoming-event-scroller" data-upcoming-scroller>${landingEvents.map((event, index) => renderLandingScrollerCard(event, index, currentEventIndex)).join("") || `<article class="panel empty-events-panel"><div class="panel-heading"><h3>No events in this window</h3><p>Check back soon for updated troop calendar details.</p></div></article>`}</div>
-<button class="event-scroll-button next" type="button" data-event-scroll="1" aria-label="Browse later events">&#8250;</button>
-</div>${
-		landingEvents.length
-			? `<div class="event-scroll-dots" aria-label="Event position">${landingEvents
-					.map(
-						(
-							_,
-							index,
-						) => `<span class="event-scroll-dot${index === currentEventIndex ? " is-active" : ""}">
-</span>`,
-					)
-					.join("")}</div>`
-			: ""
-	}</section>`;
+${renderTroopCalendarHighlightsSection()}`;
 	requestUpcomingScrollerCenter();
 }
 
@@ -3030,8 +3076,14 @@ function renderReservationsRoute() {
 <tbody>${
 		rangeEvents
 			.map((event) => {
+				if (!event.registrationRequired) {
+					return `<tr><td>${event.title}</td><td>${event.dateLabel || formatEventListDate(event) || "-"}</td><td>${event.homeBase || event.location || "-"}</td><td></td><td></td></tr>`;
+				}
 				const counts = countEventReservations(event);
-				return `<tr><td><a class="text-link" href="${reservationEventRouteUrl(event.id, startDate, endDate)}">${event.title}</a></td><td><a class="text-link" href="${reservationEventRouteUrl(event.id, startDate, endDate)}">${event.dateLabel || formatEventListDate(event) || "-"}</a></td><td><a class="text-link" href="${reservationEventRouteUrl(event.id, startDate, endDate)}">${event.homeBase || event.location || "-"}</a></td><td><a class="text-link" href="${reservationEventRouteUrl(event.id, startDate, endDate)}"><strong>${counts.scouts}</strong> / ${totalScouts}</a></td><td><a class="text-link" href="${reservationEventRouteUrl(event.id, startDate, endDate)}"><strong>${counts.adults}</strong> / ${totalAdults}</a></td></tr>`;
+				const requiredCellStyle =
+					'style="background: #435a48; color: #fffaf0; border-bottom-color: rgba(255, 255, 255, 0.18);"';
+				const requiredLinkStyle = 'style="color: #fffaf0;"';
+				return `<tr class="reservation-required-row"><td ${requiredCellStyle}><a class="text-link" ${requiredLinkStyle} href="${reservationEventRouteUrl(event.id, startDate, endDate)}">${event.title}</a></td><td ${requiredCellStyle}><a class="text-link" ${requiredLinkStyle} href="${reservationEventRouteUrl(event.id, startDate, endDate)}">${event.dateLabel || formatEventListDate(event) || "-"}</a></td><td ${requiredCellStyle}><a class="text-link" ${requiredLinkStyle} href="${reservationEventRouteUrl(event.id, startDate, endDate)}">${event.homeBase || event.location || "-"}</a></td><td ${requiredCellStyle}><a class="text-link" ${requiredLinkStyle} href="${reservationEventRouteUrl(event.id, startDate, endDate)}"><strong>${counts.scouts}</strong> / ${totalScouts}</a></td><td ${requiredCellStyle}><a class="text-link" ${requiredLinkStyle} href="${reservationEventRouteUrl(event.id, startDate, endDate)}"><strong>${counts.adults}</strong> / ${totalAdults}</a></td></tr>`;
 			})
 			.join("") ||
 		`<tr><td colspan="5">No events were found for this date range.</td></tr>`
@@ -3053,7 +3105,16 @@ function renderReservationEventRoute(eventId) {
 		renderNotFound();
 		return;
 	}
-	const scoutPeople = roster.map(personFromScout).filter(Boolean);
+	const scoutPeople = [...roster]
+		.sort((a, b) =>
+			`${getScoutLastName(a)} ${getScoutFirstName(a)} ${getScoutNickname(a)}`.localeCompare(
+				`${getScoutLastName(b)} ${getScoutFirstName(b)} ${getScoutNickname(b)}`,
+				undefined,
+				{ sensitivity: "base", numeric: true },
+			),
+		)
+		.map(personFromScout)
+		.filter(Boolean);
 	const adultPeople = adults
 		.map((adult) =>
 			personFromAdult(
@@ -3079,6 +3140,7 @@ function renderReservationEventRoute(eventId) {
 <strong>${countEventReservations(event).scouts} scouts / ${countEventReservations(event).adults} adults</strong>
 </div>
 </section>
+<section class="section reservation-error-section">${typeof renderEditableError === "function" ? renderEditableError() : ""}</section>
 <section class="section reservation-editor-grid">
 <div class="panel">
 <div class="panel-heading">
@@ -3141,7 +3203,7 @@ function renderEventsList() {
 <th>Actions</th>
 </tr>
 </thead>
-<tbody>${sortedEvents.map((event) => `<tr><td>${event.title}</td><td>${event.dateLabel || "-"}</td><td>${event.category || "-"}</td><td>${event.location || "-"}</td><td>${event.audience || "-"}</td><td><div class="table-action-row"><a class="text-link" href="#/events/${event.id}">View</a><a class="text-link" href="#/events/${event.id}?edit=true">Edit</a></div></td></tr>`).join("")}</tbody>
+<tbody>${sortedEvents.map((event) => `<tr><td>${event.title}</td><td>${event.dateLabel || "-"}</td><td>${event.category || "-"}</td><td>${event.location || "-"}</td><td>${event.audience || "-"}</td><td><div class="table-action-row"><a class="text-link" href="#/events/${event.id}">View</a><a class="text-link" href="#/events/${event.id}?edit=true">Edit</a><button class="icon-button remove-record-icon mini" type="button" data-delete-event="${event.id}" aria-label="Remove ${event.title}" title="Remove ${event.title}">${typeof renderTrashIcon === "function" ? renderTrashIcon() : "&times;"}</button></div></td></tr>`).join("")}</tbody>
 </table>
 </div>
 </div>
@@ -3489,7 +3551,7 @@ ${heroHomeBaseMarkup}${event.repeatEnabled ? `<span>${repeatSummary}</span>` : "
 </div>`
 						: ""
 				}</article>${visitorHomeBasePanel}</section>${visitorActivitiesSection}<section class="section"><div class="section-heading"><div><p class="eyebrow">Gallery</p><h2>Event media</h2></div><p class="section-copy">Each image or video can carry its own caption, comments, and reactions.</p></div><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, false)).join("")}</div></section>`
-			: `<section class="section event-route-grid"><article class="panel"><div class="panel-heading"><h3 class="event-content-heading"><span>Event content</span><span class="event-save-status" data-event-save-status="${eventEditorSaveStatus}">${eventEditorStatusLabel()}</span></h3><p>Changes save automatically after 0.5 seconds of inactivity.</p></div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Title</td><td><input type="text" data-event-edit-title value="${event.title}" aria-label="Event title" /></td></tr><tr><td>Category</td><td><input type="text" data-event-edit-category value="${event.category}" aria-label="Event category" /></td></tr><tr><td>Start</td><td><input type="datetime-local" data-event-edit-start value="${startValue}" aria-label="Event start date and time" /></td></tr><tr><td>End</td><td><input type="datetime-local" data-event-edit-end value="${endValue}" aria-label="Event end date and time" /></td></tr><tr><td>Home base</td><td><input type="text" data-event-edit-home-base value="${event.homeBase || ""}" aria-label="Location from where all activities will start" title="Location from where all activities will start" /></td></tr><tr><td>Audience</td><td><select data-event-edit-audience aria-label="Event audience">${audienceOptions.map((audience) => `<option value="${audience}"${audience === event.audience ? " selected" : ""}>${audience}</option>`).join("")}</select></td></tr><tr><td>Description</td><td><textarea data-event-edit-description aria-label="Event description">${event.description}</textarea></td></tr><tr><td>Detail note</td><td><textarea data-event-edit-note aria-label="Event detail note">${event.detailNote}</textarea></td></tr><tr><td>Upcoming</td><td><select data-event-edit-upcoming aria-label="Event upcoming status"><option value="true"${event.upcoming ? " selected" : ""}>Upcoming</option><option value="false"${!event.upcoming ? " selected" : ""}>Recent / past</option></select></td></tr><tr><td>Repeatable</td><td><select data-event-edit-repeat-enabled aria-label="Whether this event repeats"><option value="false"${!event.repeatEnabled ? " selected" : ""}>No</option><option value="true"${event.repeatEnabled ? " selected" : ""}>Yes</option></select></td></tr>${repeatRows}</tbody></table></div><div class="event-editor-actions"><button class="button secondary" type="button" data-add-activity="${event.id}">Add activity</button><button class="button secondary" type="button" data-copy-event="${event.id}">Copy as new event</button><button class="button danger" type="button" data-delete-event="${event.id}">Remove event</button></div></article><article class="panel"><div class="panel-heading"><h3>Visitor gallery</h3><p>Upload one or more image or video files at once. Items are stored oldest to newest by upload time; the selected primary item still displays first.</p></div><label class="button secondary upload-button"><input class="visually-hidden-file-input" type="file" data-event-image-upload accept="image/*,video/*" multiple />Upload media</label><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, true)).join("")}</div></article></section><section class="section"><div class="panel map-panel"><div class="panel-heading"><h3>Home base map preview</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Edit event activities</h2></div><p class="section-copy">Each activity can have its own description, location, and start/end date and time.</p></div><div class="detail-stack">${activitiesMarkup}</div></section>`
+			: `<section class="section event-route-grid"><article class="panel"><div class="panel-heading"><h3 class="event-content-heading"><span>Event content</span><span class="event-save-status" data-event-save-status="${eventEditorSaveStatus}">${eventEditorStatusLabel()}</span></h3><p>Changes save automatically 2 seconds after the last change.</p>${typeof renderEditableError === "function" ? renderEditableError() : ""}</div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Title</td><td><input type="text" data-event-edit-title value="${event.title}" aria-label="Event title" /></td></tr><tr><td>Category</td><td><input type="text" data-event-edit-category value="${event.category}" aria-label="Event category" /></td></tr><tr><td>Start</td><td><input type="datetime-local" data-event-edit-start value="${startValue}" aria-label="Event start date and time" /></td></tr><tr><td>End</td><td><input type="datetime-local" data-event-edit-end value="${endValue}" aria-label="Event end date and time" /></td></tr><tr><td>Home base</td><td><input type="text" data-event-edit-home-base value="${event.homeBase || ""}" aria-label="Location from where all activities will start" title="Location from where all activities will start" /></td></tr><tr><td>Audience</td><td><select data-event-edit-audience aria-label="Event audience">${audienceOptions.map((audience) => `<option value="${audience}"${audience === event.audience ? " selected" : ""}>${audience}</option>`).join("")}</select></td></tr><tr><td>Description</td><td><textarea data-event-edit-description aria-label="Event description">${event.description}</textarea></td></tr><tr><td>Detail note</td><td><textarea data-event-edit-note aria-label="Event detail note">${event.detailNote}</textarea></td></tr><tr><td>Reservation</td><td><label class="reservation-required-toggle"><input type="checkbox" data-event-edit-registration-required aria-label="Reservation required for this event"${event.registrationRequired ? " checked" : ""} /><span>Reservation required</span></label></td></tr><tr><td>Upcoming</td><td><select data-event-edit-upcoming aria-label="Event upcoming status"><option value="true"${event.upcoming ? " selected" : ""}>Upcoming</option><option value="false"${!event.upcoming ? " selected" : ""}>Recent / past</option></select></td></tr><tr><td>Repeatable</td><td><select data-event-edit-repeat-enabled aria-label="Whether this event repeats"><option value="false"${!event.repeatEnabled ? " selected" : ""}>No</option><option value="true"${event.repeatEnabled ? " selected" : ""}>Yes</option></select></td></tr>${repeatRows}</tbody></table></div><div class="event-editor-actions"><button class="button secondary" type="button" data-add-activity="${event.id}">Add activity</button><button class="button secondary" type="button" data-copy-event="${event.id}">Copy as new event</button><button class="button danger" type="button" data-delete-event="${event.id}">Remove event</button></div></article><article class="panel"><div class="panel-heading"><h3>Visitor gallery</h3><p>Upload one or more image or video files at once. Items are stored oldest to newest by upload time; the selected primary item still displays first.</p></div><label class="button secondary upload-button"><input class="visually-hidden-file-input" type="file" data-event-image-upload accept="image/*,video/*" multiple />Upload media</label><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, true)).join("")}</div></article></section><section class="section"><div class="panel map-panel"><div class="panel-heading"><h3>Home base map preview</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Edit event activities</h2></div><p class="section-copy">Each activity can have its own description, location, and start/end date and time.</p></div><div class="detail-stack">${activitiesMarkup}</div></section>`
 	}`;
 }
 
@@ -3569,25 +3631,30 @@ function unregisterPersonForEvent(event, person) {
 // Saves person event reservation changes back to local or API storage.
 async function savePersonEventReservation(event, person, reserved) {
 	if (!event || !person) {
-		return false;
+		throw new Error("A reservation needs both an event and a person.");
 	}
 	const method = reserved ? "POST" : "DELETE";
-	try {
-		const response = await fetch(
-			`/api/events/${encodeURIComponent(event.id)}/reservations/${encodeURIComponent(person.personId)}`,
-			{
-				method,
-				headers: authHeaders({ "Content-Type": "application/json" }),
-				body: reserved
-					? JSON.stringify({ personType: person.personType })
-					: undefined,
-			},
+	const response = await fetch(
+		`/api/events/${encodeURIComponent(event.id)}/reservations/${encodeURIComponent(person.personId)}`,
+		{
+			method,
+			headers: authHeaders({ "Content-Type": "application/json" }),
+			body: reserved
+				? JSON.stringify({ personType: person.personType })
+				: undefined,
+		},
+	);
+	if (!response.ok) {
+		const responseText = await response.text().catch(() => "");
+		let message = responseText;
+		try {
+			const parsed = JSON.parse(responseText || "{}");
+			message = parsed.error || parsed.message || responseText;
+		} catch (error) {}
+		throw new Error(
+			message ||
+				`Could not ${reserved ? "save" : "remove"} the reservation.`,
 		);
-		if (!response.ok) {
-			return false;
-		}
-	} catch (error) {
-		return false;
 	}
 	if (reserved) {
 		registerPersonForEvent(event, person);
@@ -3698,6 +3765,9 @@ function renderRegistrationAction(event, person) {
 }
 // Renders event registration panel markup for the event UI.
 function renderEventRegistrationPanel(event) {
+	if (!event?.registrationRequired) {
+		return "";
+	}
 	if (!currentActor?.authenticated) {
 		return "";
 	}

@@ -5,6 +5,9 @@ const fs = require("fs");
 const path = require("path");
 
 const root = __dirname;
+const scoutsLibRoot = fs.existsSync(path.join(root, "scouts-lib"))
+	? path.join(root, "scouts-lib")
+	: path.join(root, "..", "scouts-lib", "src");
 const port = Number(process.env.PORT || 4173);
 const ormBaseUrl = String(
 	process.env.ORM_BASE_URL || "http://127.0.0.1:4175",
@@ -87,6 +90,13 @@ function forwardRequest(req, res, baseUrl) {
 }
 
 function resolveStaticFilePath(requestedPath) {
+	if (requestedPath.startsWith("/scouts-lib/")) {
+		const libraryPath = requestedPath.replace(/^\/scouts-lib\//, "");
+		return path.join(
+			scoutsLibRoot,
+			path.normalize(libraryPath).replace(/^(\.\.[/\\])+/, ""),
+		);
+	}
 	const safePath = path
 		.normalize(requestedPath)
 		.replace(/^(\.\.[/\\])+/, "");
