@@ -3159,6 +3159,26 @@ function renderReservationEventRoute(eventId) {
 </section>`;
 }
 // Renders events list markup for the event UI.
+function renderEventListIndicators(event) {
+	const indicators = [];
+	if (event.registrationRequired) {
+		indicators.push(`<span class="event-list-indicator reservation" title="Reservation required" aria-label="Reservation required">
+<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M7 3h10a2 2 0 0 1 2 2v16l-3-2-3 2-3-2-3 2-2-1.4V5a2 2 0 0 1 2-2Zm1 5h8V6H8v2Zm0 4h8v-2H8v2Zm0 4h5v-2H8v2Z" fill="currentColor"/></svg>
+</span>`);
+	}
+	if (event.homeBase || event.location) {
+		indicators.push(`<span class="event-list-indicator location" title="Location available" aria-label="Location available">
+<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6a2.5 2.5 0 0 1 0 5.5Z" fill="currentColor"/></svg>
+</span>`);
+	}
+	if (event.repeatEnabled) {
+		indicators.push(`<span class="event-list-indicator repeat" title="Repeating event" aria-label="Repeating event">
+<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M7 7h9.2l-2.6-2.6L15 3l5 5-5 5-1.4-1.4L16.2 9H7a3 3 0 0 0-3 3v1H2v-1a5 5 0 0 1 5-5Zm10 10H7.8l2.6 2.6L9 21l-5-5 5-5 1.4 1.4L7.8 15H17a3 3 0 0 0 3-3v-1h2v1a5 5 0 0 1-5 5Z" fill="currentColor"/></svg>
+</span>`);
+	}
+	if (!indicators.length) return "";
+	return `<span class="event-list-indicators">${indicators.join("")}</span>`;
+}
 function renderEventsList() {
 	if (!canSeeOrgChart()) {
 		renderAccessDenied();
@@ -3186,13 +3206,13 @@ function renderEventsList() {
 <a class="button secondary" href="#/events/calendar">Open calendar view</a>
 </div>
 </div>
-<div class="panel">
+<div class="panel events-list-panel">
 <div class="panel-heading">
 <h3>${sortedEvents.length} events loaded</h3>
 <p>Newest start date first. Use View for the display page or Edit to open the editor.</p>
 </div>
-<div class="table-wrap">
-<table class="data-table">
+<div class="table-wrap events-table-wrap">
+<table class="data-table events-list-table">
 <thead>
 <tr>
 <th>Title</th>
@@ -3203,7 +3223,7 @@ function renderEventsList() {
 <th>Actions</th>
 </tr>
 </thead>
-<tbody>${sortedEvents.map((event) => `<tr><td>${event.title}</td><td>${event.dateLabel || "-"}</td><td>${event.category || "-"}</td><td>${event.location || "-"}</td><td>${event.audience || "-"}</td><td><div class="table-action-row"><a class="text-link" href="#/events/${event.id}">View</a><a class="text-link" href="#/events/${event.id}?edit=true">Edit</a><button class="icon-button remove-record-icon mini" type="button" data-delete-event="${event.id}" aria-label="Remove ${event.title}" title="Remove ${event.title}">${typeof renderTrashIcon === "function" ? renderTrashIcon() : "&times;"}</button></div></td></tr>`).join("")}</tbody>
+<tbody>${sortedEvents.map((event) => `<tr><td data-label="Title"><span class="event-list-title">${event.title}</span>${renderEventListIndicators(event)}</td><td data-label="Dates">${event.dateLabel || "-"}</td><td data-label="Category">${event.category || "-"}</td><td data-label="Location">${event.location || "-"}</td><td data-label="Audience">${event.audience || "-"}</td><td data-label="Actions"><div class="table-action-row events-table-actions"><a class="text-link" href="#/events/${event.id}">View</a><a class="text-link" href="#/events/${event.id}?edit=true">Edit</a><button class="icon-button remove-record-icon mini" type="button" data-delete-event="${event.id}" aria-label="Remove ${event.title}" title="Remove ${event.title}">${typeof renderTrashIcon === "function" ? renderTrashIcon() : "&times;"}</button></div></td></tr>`).join("")}</tbody>
 </table>
 </div>
 </div>
@@ -3409,12 +3429,12 @@ function renderEventRoute(eventId) {
 					const activityEnd = formatDateTimeLocalValue(
 						activity.endDate || activity.startDate,
 					);
-					return `<article class="month-summary-card">
+					return `<article class="month-summary-card event-activity-card">
 <div class="panel-heading">
-<h3>${visitorView ? activity.description || `Activity ${index + 1}` : `Activity ${index + 1}`}</h3>${!visitorView ? `<button class="icon-button" type="button" data-remove-activity="${activity.id}" aria-label="Remove activity ${index + 1}">&times;</button>` : ""}</div>${visitorView ? `<p class="event-description">${activity.description || "No activity description yet."}</p><ul class="detail-list"><li>Location: ${activity.location || "Location TBD"}</li><li>Starts: ${formatExactEventDateTime(activity.startDate)}</li><li>Ends: ${formatExactEventDateTime(activity.endDate || activity.startDate)}</li></ul>` : `<div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Description</td><td><input type="text" data-activity-description="${activity.id}" value="${activity.description}" aria-label="Activity description" /></td></tr><tr><td>Location</td><td><input type="text" data-activity-location="${activity.id}" value="${activity.location}" aria-label="Activity location" /></td></tr><tr><td>Start</td><td><input type="datetime-local" data-activity-start="${activity.id}" value="${activityStart}" aria-label="Activity start date and time" /></td></tr><tr><td>End</td><td><input type="datetime-local" data-activity-end="${activity.id}" value="${activityEnd}" aria-label="Activity end date and time" /></td></tr></tbody></table></div>`}</article>`;
+<h3>${visitorView ? activity.description || `Activity ${index + 1}` : `Activity ${index + 1}`}</h3>${!visitorView ? `<button class="icon-button" type="button" data-remove-activity="${activity.id}" aria-label="Remove activity ${index + 1}">&times;</button>` : ""}</div>${visitorView ? `<p class="event-description">${activity.description || "No activity description yet."}</p><ul class="detail-list"><li>Location: ${activity.location || "Location TBD"}</li><li>Starts: ${formatExactEventDateTime(activity.startDate)}</li><li>Ends: ${formatExactEventDateTime(activity.endDate || activity.startDate)}</li></ul>` : `<div class="table-wrap responsive-detail-table-wrap"><table class="data-table compact responsive-detail-table event-activity-table"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td data-label="Field">Description</td><td data-label="Value"><input type="text" data-activity-description="${activity.id}" value="${activity.description}" aria-label="Activity description" /></td></tr><tr><td data-label="Field">Location</td><td data-label="Value"><input type="text" data-activity-location="${activity.id}" value="${activity.location}" aria-label="Activity location" /></td></tr><tr><td data-label="Field">Start</td><td data-label="Value"><input type="datetime-local" data-activity-start="${activity.id}" value="${activityStart}" aria-label="Activity start date and time" /></td></tr><tr><td data-label="Field">End</td><td data-label="Value"><input type="datetime-local" data-activity-end="${activity.id}" value="${activityEnd}" aria-label="Activity end date and time" /></td></tr></tbody></table></div>`}</article>`;
 				})
 				.join("")
-		: `<article class="month-summary-card">
+		: `<article class="month-summary-card event-activity-card">
 <p class="event-description">${visitorView ? "No activities are listed for this event yet." : "No activities yet. Use Add activity to create the first one."}</p>
 </article>`;
 	const visitorActivitiesSection = displayActivities.length
@@ -3431,8 +3451,8 @@ function renderEventRoute(eventId) {
 		: "";
 	const repeatRows = event.repeatEnabled
 		? `<tr>
-<td>Repeat frequency</td>
-<td>
+<td data-label="Field">Repeat frequency</td>
+<td data-label="Value">
 <select data-event-edit-repeat-frequency aria-label="Event repeat frequency">
 <option value="daily"${event.repeatFrequency === "daily" ? " selected" : ""}>Daily</option>
 <option value="weekly"${event.repeatFrequency === "weekly" ? " selected" : ""}>Weekly</option>
@@ -3441,14 +3461,14 @@ function renderEventRoute(eventId) {
 </td>
 </tr>
 <tr>
-<td>Repeat interval</td>
-<td>
+<td data-label="Field">Repeat interval</td>
+<td data-label="Value">
 <input type="number" min="1" step="1" data-event-edit-repeat-interval value="${event.repeatInterval || 1}" aria-label="Repeat every number of intervals" />
 </td>
 </tr>
 <tr>
-<td>Monthly repeat rule</td>
-<td>
+<td data-label="Field">Monthly repeat rule</td>
+<td data-label="Value">
 <select data-event-edit-repeat-monthly-pattern aria-label="Monthly repeat pattern">
 <option value="date"${monthlyPattern === "date" ? " selected" : ""}>Same date each month</option>
 <option value="nth-weekday"${monthlyPattern === "nth-weekday" ? " selected" : ""}>Nth weekday of the month</option>
@@ -3456,8 +3476,8 @@ function renderEventRoute(eventId) {
 </td>
 </tr>
 <tr>
-<td>Monthly ordinal</td>
-<td>
+<td data-label="Field">Monthly ordinal</td>
+<td data-label="Value">
 <select data-event-edit-repeat-monthly-ordinal aria-label="Monthly repeat ordinal">
 <option value="first"${monthlyOrdinal === "first" ? " selected" : ""}>First</option>
 <option value="second"${monthlyOrdinal === "second" ? " selected" : ""}>Second</option>
@@ -3468,8 +3488,8 @@ function renderEventRoute(eventId) {
 </td>
 </tr>
 <tr>
-<td>Monthly weekday</td>
-<td>
+<td data-label="Field">Monthly weekday</td>
+<td data-label="Value">
 <select data-event-edit-repeat-monthly-weekday aria-label="Monthly repeat weekday">
 <option value="sunday"${monthlyWeekday === "sunday" ? " selected" : ""}>Sunday</option>
 <option value="monday"${monthlyWeekday === "monday" ? " selected" : ""}>Monday</option>
@@ -3482,8 +3502,8 @@ function renderEventRoute(eventId) {
 </td>
 </tr>
 <tr>
-<td>Repeat until</td>
-<td>
+<td data-label="Field">Repeat until</td>
+<td data-label="Value">
 <input type="datetime-local" data-event-edit-repeat-until value="${repeatUntilValue}" aria-label="Repeat until date and time" />
 </td>
 </tr>`
@@ -3551,7 +3571,7 @@ ${heroHomeBaseMarkup}${event.repeatEnabled ? `<span>${repeatSummary}</span>` : "
 </div>`
 						: ""
 				}</article>${visitorHomeBasePanel}</section>${visitorActivitiesSection}<section class="section"><div class="section-heading"><div><p class="eyebrow">Gallery</p><h2>Event media</h2></div><p class="section-copy">Each image or video can carry its own caption, comments, and reactions.</p></div><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, false)).join("")}</div></section>`
-			: `<section class="section event-route-grid"><article class="panel"><div class="panel-heading"><h3 class="event-content-heading"><span>Event content</span><span class="event-save-status" data-event-save-status="${eventEditorSaveStatus}">${eventEditorStatusLabel()}</span></h3><p>Changes save automatically 2 seconds after the last change.</p>${typeof renderEditableError === "function" ? renderEditableError() : ""}</div><div class="table-wrap"><table class="data-table compact"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td>Title</td><td><input type="text" data-event-edit-title value="${event.title}" aria-label="Event title" /></td></tr><tr><td>Category</td><td><input type="text" data-event-edit-category value="${event.category}" aria-label="Event category" /></td></tr><tr><td>Start</td><td><input type="datetime-local" data-event-edit-start value="${startValue}" aria-label="Event start date and time" /></td></tr><tr><td>End</td><td><input type="datetime-local" data-event-edit-end value="${endValue}" aria-label="Event end date and time" /></td></tr><tr><td>Home base</td><td><input type="text" data-event-edit-home-base value="${event.homeBase || ""}" aria-label="Location from where all activities will start" title="Location from where all activities will start" /></td></tr><tr><td>Audience</td><td><select data-event-edit-audience aria-label="Event audience">${audienceOptions.map((audience) => `<option value="${audience}"${audience === event.audience ? " selected" : ""}>${audience}</option>`).join("")}</select></td></tr><tr><td>Description</td><td><textarea data-event-edit-description aria-label="Event description">${event.description}</textarea></td></tr><tr><td>Detail note</td><td><textarea data-event-edit-note aria-label="Event detail note">${event.detailNote}</textarea></td></tr><tr><td>Reservation</td><td><label class="reservation-required-toggle"><input type="checkbox" data-event-edit-registration-required aria-label="Reservation required for this event"${event.registrationRequired ? " checked" : ""} /><span>Reservation required</span></label></td></tr><tr><td>Upcoming</td><td><select data-event-edit-upcoming aria-label="Event upcoming status"><option value="true"${event.upcoming ? " selected" : ""}>Upcoming</option><option value="false"${!event.upcoming ? " selected" : ""}>Recent / past</option></select></td></tr><tr><td>Repeatable</td><td><select data-event-edit-repeat-enabled aria-label="Whether this event repeats"><option value="false"${!event.repeatEnabled ? " selected" : ""}>No</option><option value="true"${event.repeatEnabled ? " selected" : ""}>Yes</option></select></td></tr>${repeatRows}</tbody></table></div><div class="event-editor-actions"><button class="button secondary" type="button" data-add-activity="${event.id}">Add activity</button><button class="button secondary" type="button" data-copy-event="${event.id}">Copy as new event</button><button class="button danger" type="button" data-delete-event="${event.id}">Remove event</button></div></article><article class="panel"><div class="panel-heading"><h3>Visitor gallery</h3><p>Upload one or more image or video files at once. Items are stored oldest to newest by upload time; the selected primary item still displays first.</p></div><label class="button secondary upload-button"><input class="visually-hidden-file-input" type="file" data-event-image-upload accept="image/*,video/*" multiple />Upload media</label><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, true)).join("")}</div></article></section><section class="section"><div class="panel map-panel"><div class="panel-heading"><h3>Home base map preview</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></div></section><section class="section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Edit event activities</h2></div><p class="section-copy">Each activity can have its own description, location, and start/end date and time.</p></div><div class="detail-stack">${activitiesMarkup}</div></section>`
+			: `<section class="section event-route-grid event-editor-grid"><article class="panel event-editor-panel"><div class="panel-heading"><h3 class="event-content-heading"><span>Event content</span><span class="event-save-status" data-event-save-status="${eventEditorSaveStatus}">${eventEditorStatusLabel()}</span></h3><p>Changes save automatically 2 seconds after the last change.</p>${typeof renderEditableError === "function" ? renderEditableError() : ""}</div><div class="table-wrap responsive-detail-table-wrap"><table class="data-table compact responsive-detail-table event-edit-table"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td data-label="Field">Title</td><td data-label="Value"><input type="text" data-event-edit-title value="${event.title}" aria-label="Event title" /></td></tr><tr><td data-label="Field">Category</td><td data-label="Value"><input type="text" data-event-edit-category value="${event.category}" aria-label="Event category" /></td></tr><tr><td data-label="Field">Start</td><td data-label="Value"><input type="datetime-local" data-event-edit-start value="${startValue}" aria-label="Event start date and time" /></td></tr><tr><td data-label="Field">End</td><td data-label="Value"><input type="datetime-local" data-event-edit-end value="${endValue}" aria-label="Event end date and time" /></td></tr><tr><td data-label="Field">Home base</td><td data-label="Value"><input type="text" data-event-edit-home-base value="${event.homeBase || ""}" aria-label="Location from where all activities will start" title="Location from where all activities will start" /></td></tr><tr><td data-label="Field">Audience</td><td data-label="Value"><select data-event-edit-audience aria-label="Event audience">${audienceOptions.map((audience) => `<option value="${audience}"${audience === event.audience ? " selected" : ""}>${audience}</option>`).join("")}</select></td></tr><tr><td data-label="Field">Description</td><td data-label="Value"><textarea data-event-edit-description aria-label="Event description">${event.description}</textarea></td></tr><tr><td data-label="Field">Detail note</td><td data-label="Value"><textarea data-event-edit-note aria-label="Event detail note">${event.detailNote}</textarea></td></tr><tr><td data-label="Field">Reservation</td><td data-label="Value"><label class="reservation-required-toggle"><input type="checkbox" data-event-edit-registration-required aria-label="Reservation required for this event"${event.registrationRequired ? " checked" : ""} /><span>Reservation required</span></label></td></tr><tr><td data-label="Field">Upcoming</td><td data-label="Value"><select data-event-edit-upcoming aria-label="Event upcoming status"><option value="true"${event.upcoming ? " selected" : ""}>Upcoming</option><option value="false"${!event.upcoming ? " selected" : ""}>Recent / past</option></select></td></tr><tr><td data-label="Field">Repeatable</td><td data-label="Value"><select data-event-edit-repeat-enabled aria-label="Whether this event repeats"><option value="false"${!event.repeatEnabled ? " selected" : ""}>No</option><option value="true"${event.repeatEnabled ? " selected" : ""}>Yes</option></select></td></tr>${repeatRows}</tbody></table></div><div class="event-editor-actions"><button class="button secondary" type="button" data-add-activity="${event.id}">Add activity</button><button class="button secondary" type="button" data-copy-event="${event.id}">Copy as new event</button><button class="button danger" type="button" data-delete-event="${event.id}">Remove event</button></div></article><article class="panel event-gallery-panel"><div class="panel-heading"><h3>Visitor gallery</h3><p>Upload one or more image or video files at once. Items are stored oldest to newest by upload time; the selected primary item still displays first.</p></div><label class="button secondary upload-button"><input class="visually-hidden-file-input" type="file" data-event-image-upload accept="image/*,video/*" multiple />Upload media</label><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, true)).join("")}</div></article></section><section class="section"><div class="panel map-panel event-map-panel"><div class="panel-heading"><h3>Home base map preview</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></div></section><section class="section event-activities-section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Edit event activities</h2></div><p class="section-copy">Each activity can have its own description, location, and start/end date and time.</p></div><div class="detail-stack event-activity-list">${activitiesMarkup}</div></section>`
 	}`;
 }
 
@@ -3785,6 +3805,149 @@ function renderEventRegistrationPanel(event) {
 </article>
 </section>`;
 }
+// Gets scout detail reservation range for event routing, rendering, or filtering.
+function getScoutReservationRange() {
+	const start = startOfDay(addMonths(prototypeToday, -1));
+	const end = addMonths(prototypeToday, 3);
+	end.setHours(23, 59, 59, 999);
+	return {
+		startDate: formatDateKey(start),
+		endDate: formatDateKey(end),
+	};
+}
+// Gets adult detail reservation range for event routing, rendering, or filtering.
+function getAdultReservationRange() {
+	return getScoutReservationRange();
+}
+// Gets event list for scout detail reservations.
+function getScoutReservationEventsForRange(eventsForRange, scout, range) {
+	if (!scout || !range?.startDate || !range?.endDate) {
+		return [];
+	}
+	return [...(Array.isArray(eventsForRange) ? eventsForRange : [])]
+		.filter(
+			(event) =>
+				event?.registrationRequired &&
+				eventMatchesScoutRegistration(event, scout) &&
+				eventOverlapsDateRange(
+					event,
+					range.startDate,
+					range.endDate,
+				),
+		)
+		.sort(
+			(a, b) =>
+				(parseEventStartDate(a)?.getTime() || 0) -
+				(parseEventStartDate(b)?.getTime() || 0),
+		);
+}
+// Gets event list for adult detail reservations.
+function getAdultReservationEventsForRange(eventsForRange, adult, range) {
+	if (!adult || !range?.startDate || !range?.endDate) {
+		return [];
+	}
+	return [...(Array.isArray(eventsForRange) ? eventsForRange : [])]
+		.filter(
+			(event) =>
+				event?.registrationRequired &&
+				eventMatchesAdultRegistration(event, adult) &&
+				eventOverlapsDateRange(
+					event,
+					range.startDate,
+					range.endDate,
+				),
+		)
+		.sort(
+			(a, b) =>
+				(parseEventStartDate(a)?.getTime() || 0) -
+				(parseEventStartDate(b)?.getTime() || 0),
+		);
+}
+// Renders a reservation row for a person detail panel.
+function renderPersonEventReservationRow(event, person, dataAttributes = "") {
+	const registered = isPersonRegisteredForEvent(event, person);
+	const buttonLabel = registered
+		? "Cancel reservation"
+		: "Reserve a spot";
+	return `<div class="event-registration-row scout-reservation-row">
+<div>
+<strong><a class="text-link" href="#/events/${event.id}">${event.title}</a></strong>
+<span>${event.dateLabel || formatEventListDate(event) || "Date TBD"}${event.homeBase || event.location ? ` &bull; ${event.homeBase || event.location}` : ""}</span>
+</div>
+<div class="scout-reservation-action" data-scout-reservation-action>
+<button class="scout-reservation-button${registered ? " is-registered" : ""}" type="button" ${dataAttributes} data-reservation-next-state="${registered ? "false" : "true"}" aria-pressed="${registered ? "true" : "false"}">${buttonLabel}</button>
+</div>
+</div>`;
+}
+// Renders scout detail event reservation markup.
+function renderEventReservationSection(options = {}) {
+	const scout = options.scout || null;
+	if (!scout) {
+		return "";
+	}
+	const range = options.range || getScoutReservationRange();
+	const reservationEvents = getScoutReservationEventsForRange(
+		options.events || [],
+		scout,
+		range,
+	);
+	const person = personFromScout(scout);
+	const rangeLabel = `${formatFullDate(range.startDate)} - ${formatFullDate(range.endDate)}`;
+	const eventRows = reservationEvents
+		.map((event) => {
+			return renderPersonEventReservationRow(
+				event,
+				person,
+				`data-scout-event-reserve="${event.id}" data-reservation-scout-id="${scout.id}"`,
+			);
+		})
+		.join("");
+	return `<section class="section">
+<article class="panel event-registration-panel scout-reservation-panel">
+<div class="panel-heading">
+<h3>Event reservations</h3>
+<p>Reservation-required events for ${scout.name} from ${rangeLabel}.</p>
+</div>
+<div class="event-registration-list">${eventRows || `<p class="event-description">No reservation-required events match this scout in this date range.</p>`}</div>
+</article>
+</section>`;
+}
+// Renders adult detail event reservation markup.
+function renderAdultEventReservationSection(options = {}) {
+	const adult = options.adult || null;
+	if (!adult) {
+		return "";
+	}
+	const range = options.range || getAdultReservationRange();
+	const reservationEvents = getAdultReservationEventsForRange(
+		options.events || [],
+		adult,
+		range,
+	);
+	const person = personFromAdult(
+		adult,
+		getAdultLeaderAssignment(adult.id)?.role || adult.relationship,
+	);
+	const rangeLabel = `${formatFullDate(range.startDate)} - ${formatFullDate(range.endDate)}`;
+	const eventRows = reservationEvents
+		.map((event) =>
+			renderPersonEventReservationRow(
+				event,
+				person,
+				`data-adult-event-reserve="${event.id}" data-reservation-adult-id="${adult.id}"`,
+			),
+		)
+		.join("");
+	return `<section class="section">
+<article class="panel event-registration-panel scout-reservation-panel">
+<div class="panel-heading">
+<h3>Event reservations</h3>
+<p>Reservation-required events for ${adult.name} from ${rangeLabel}.</p>
+</div>
+<div class="event-registration-list">${eventRows || `<p class="event-description">No reservation-required events match this adult in this date range.</p>`}</div>
+</article>
+</section>`;
+}
 // Gets active parent adult for event routing, rendering, or filtering.
 function getActiveParentAdult() {
 	return (
@@ -3839,6 +4002,27 @@ function eventMatchesScoutRegistration(event, scout) {
 	}
 	if (audience === "individuals") {
 		return eventText.includes(String(scout.name || "").toLowerCase());
+	}
+	return false;
+}
+// Builds or checks event matches adult registration behavior.
+function eventMatchesAdultRegistration(event, adult) {
+	if (!event || !adult) {
+		return false;
+	}
+	const audience = String(event.audience || "")
+		.trim()
+		.toLowerCase();
+	if (!audience || audience === "troop" || audience === "unit") {
+		return true;
+	}
+	if (audience === "adults") {
+		return true;
+	}
+	if (audience === "individuals") {
+		return eventTextForRegistration(event).includes(
+			String(adult.name || "").toLowerCase(),
+		);
 	}
 	return false;
 }

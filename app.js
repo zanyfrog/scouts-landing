@@ -2246,6 +2246,34 @@ async function loadData() {
 			console.warn(error);
 		}
 	}
+	if (
+		((window.location.hash || "").startsWith("#/scouts/") ||
+			(window.location.hash || "").startsWith("#/adults/")) &&
+		currentActor?.authenticated
+	) {
+		try {
+			const range = (window.location.hash || "").startsWith("#/adults/")
+				? getAdultReservationRange()
+				: getScoutReservationRange();
+			const response = await fetch(
+				eventsRangeUrl(range.startDate, range.endDate),
+				{ cache: "no-store", headers: authHeaders() },
+			);
+			if (!response.ok) {
+				throw new Error("Could not load scout reservation events.");
+			}
+			const payload = await response.json();
+			const incomingEvents = Array.isArray(payload.events)
+				? payload.events
+				: Array.isArray(payload.data?.events)
+					? payload.data.events
+					: [];
+			mergeLoadedEvents(incomingEvents);
+			rebuildDerivedData();
+		} catch (error) {
+			console.warn(error);
+		}
+	}
 
 	if (!getActiveScoutId() && roster[0]?.id) {
 		setActiveScoutId(roster[0].id);
@@ -3198,6 +3226,19 @@ function renderAdultRecordEditor(adultId) {
 	const leaderAssignment = getAdultLeaderAssignment(adult.id);
 	const linkedScouts = getScoutsForAdult(adult);
 	const availableScouts = getAvailableScoutsForAdult(adult);
+	const reservationRange = getAdultReservationRange();
+	const reservationEvents = getSortedEvents().filter((event) =>
+		eventOverlapsDateRange(
+			event,
+			reservationRange.startDate,
+			reservationRange.endDate,
+		),
+	);
+	const reservationSection = renderAdultEventReservationSection({
+		adult,
+		events: reservationEvents,
+		range: reservationRange,
+	});
 	app.innerHTML = `${topNav()}<section class="dashboard-banner">
 <div>
 <p class="eyebrow">Adult record</p>
@@ -3267,7 +3308,7 @@ ${renderEditableError()}
 </table>
 </div>
 </div>
-</section>`;
+</section>${reservationSection}`;
 }
 function renderHolidayRows() {
 	const sortedHolidays = getSortedHolidays();
@@ -3492,6 +3533,19 @@ function renderScoutRecordEditor(scoutId) {
 		: modeSelect.value === "parent"
 			? "Linked parents can update this scout record."
 			: "The logged-in scout can edit their own record.";
+	const reservationRange = getScoutReservationRange();
+	const reservationEvents = getSortedEvents().filter((event) =>
+		eventOverlapsDateRange(
+			event,
+			reservationRange.startDate,
+			reservationRange.endDate,
+		),
+	);
+	const reservationSection = renderEventReservationSection({
+		scout,
+		events: reservationEvents,
+		range: reservationRange,
+	});
 	app.innerHTML = `${topNav()}<section class="dashboard-banner">
 <div>
 <p class="eyebrow">Scout record</p>
@@ -3580,7 +3634,7 @@ ${renderEditableError()}
 </div>
 </div>
 </div>
-</section>`;
+</section>${reservationSection}`;
 }
 function renderFriendlyAccessMessage(
 	message = "Looks like you are flailing a bit. This page needs a signed-in account with the right troop role or linked-scout relationship.",
@@ -4520,6 +4574,152 @@ document.addEventListener("click", async (event) => {
 		);
 		await saveHolidays();
 		window.location.hash = "#/holidays";
+		renderRoute();
+		return;
+	}
+
+	const scoutReservationButton = event.target.closest(
+		"[data-scout-event-reserve]",
+	);
+	if (scoutReservationButton) {
+		const currentEvent = getEventById(
+			scoutReservationButton.dataset.scoutEventReserve,
+		);
+		const scout = roster.find(
+			(entry) =>
+				entry.id === scoutReservationButton.dataset.reservationScoutId,
+		);
+		if (
+			!currentEvent ||
+			!scout ||
+			!canEditScoutRecord(scout.id)
+		) {
+			return;
+		}
+		const reserved =
+			scoutReservationButton.dataset.reservationNextState ===
+			"true";
+		const oldReserved = !reserved;
+		const reservationAction = scoutReservationButton.closest(
+			"[data-scout-reservation-action]",
+		);
+		scoutReservationButton.disabled = true;
+		scoutReservationButton.setAttribute("aria-busy", "true");
+		scoutReservationButton.classList.toggle("is-registered", reserved);
+		scoutReservationButton.classList.add("is-saving");
+		scoutReservationButton.textContent = reserved
+			? "Cancel reservation"
+			: "Reserve a spot";
+		scoutReservationButton.setAttribute(
+			"aria-pressed",
+			reserved ? "true" : "false",
+		);
+		if (reservationAction) {
+			reservationAction.dataset.reservationPending = "true";
+		}
+		clearEditableError();
+		try {
+			await savePersonEventReservation(
+				currentEvent,
+				personFromScout(scout),
+				reserved,
+			);
+		} catch (error) {
+			scoutReservationButton.disabled = false;
+			scoutReservationButton.removeAttribute("aria-busy");
+			scoutReservationButton.classList.toggle(
+				"is-registered",
+				oldReserved,
+			);
+			scoutReservationButton.classList.remove("is-saving");
+			scoutReservationButton.textContent = oldReserved
+				? "Cancel reservation"
+				: "Reserve a spot";
+			scoutReservationButton.setAttribute(
+				"aria-pressed",
+				oldReserved ? "true" : "false",
+			);
+			if (reservationAction) {
+				reservationAction.dataset.reservationPending = "false";
+			}
+			setEditableError(
+				error,
+				`Could not ${reserved ? "reserve" : "cancel"} this scout reservation.`,
+			);
+		}
+		renderRoute();
+		return;
+	}
+
+	const adultReservationButton = event.target.closest(
+		"[data-adult-event-reserve]",
+	);
+	if (adultReservationButton) {
+		const currentEvent = getEventById(
+			adultReservationButton.dataset.adultEventReserve,
+		);
+		const adult = adults.find(
+			(entry) =>
+				entry.id === adultReservationButton.dataset.reservationAdultId,
+		);
+		if (!currentEvent || !adult || !canSeeOrgChart()) {
+			return;
+		}
+		const reserved =
+			adultReservationButton.dataset.reservationNextState ===
+			"true";
+		const oldReserved = !reserved;
+		const reservationAction = adultReservationButton.closest(
+			"[data-scout-reservation-action]",
+		);
+		adultReservationButton.disabled = true;
+		adultReservationButton.setAttribute("aria-busy", "true");
+		adultReservationButton.classList.toggle("is-registered", reserved);
+		adultReservationButton.classList.add("is-saving");
+		adultReservationButton.textContent = reserved
+			? "Cancel reservation"
+			: "Reserve a spot";
+		adultReservationButton.setAttribute(
+			"aria-pressed",
+			reserved ? "true" : "false",
+		);
+		if (reservationAction) {
+			reservationAction.dataset.reservationPending = "true";
+		}
+		clearEditableError();
+		try {
+			await savePersonEventReservation(
+				currentEvent,
+				personFromAdult(
+					adult,
+					getAdultLeaderAssignment(adult.id)?.role ||
+						adult.relationship,
+				),
+				reserved,
+			);
+		} catch (error) {
+			adultReservationButton.disabled = false;
+			adultReservationButton.removeAttribute("aria-busy");
+			adultReservationButton.classList.toggle(
+				"is-registered",
+				oldReserved,
+			);
+			adultReservationButton.classList.remove("is-saving");
+			adultReservationButton.textContent = oldReserved
+				? "Cancel reservation"
+				: "Reserve a spot";
+			adultReservationButton.setAttribute(
+				"aria-pressed",
+				oldReserved ? "true" : "false",
+			);
+			if (reservationAction) {
+				reservationAction.dataset.reservationPending = "false";
+			}
+			setEditableError(
+				error,
+				`Could not ${reserved ? "reserve" : "cancel"} this adult reservation.`,
+			);
+		}
 		renderRoute();
 		return;
 	}
