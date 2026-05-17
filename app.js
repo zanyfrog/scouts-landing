@@ -267,6 +267,7 @@ const scoutLeadershipOptions = [
 	"OA Representative",
 ];
 const scoutRankOptions = [
+	"",
 	"Scout",
 	"Tenderfoot",
 	"Second Class",
@@ -298,6 +299,8 @@ const eventEditorFieldSelector =
 	"[data-event-edit-title], [data-event-edit-category], [data-event-edit-start], [data-event-edit-end], [data-event-edit-home-base], [data-event-edit-audience], [data-event-edit-description], [data-event-edit-note], [data-event-edit-registration-required], [data-event-edit-upcoming], [data-event-edit-repeat-enabled], [data-event-edit-repeat-frequency], [data-event-edit-repeat-interval], [data-event-edit-repeat-until], [data-event-edit-repeat-monthly-pattern], [data-event-edit-repeat-monthly-ordinal], [data-event-edit-repeat-monthly-weekday], [data-gallery-title], [data-gallery-description], [data-activity-description], [data-activity-location], [data-activity-start], [data-activity-end]";
 let eventAutosaveTimer = null;
 let scoutRecordAutosaveTimer = null;
+let scoutRecordSaveInProgress = false;
+let scoutRecordPendingSaveId = "";
 let adultRecordAutosaveTimer = null;
 const detailRecordAutosaveDelay = 2000;
 let eventEditorSaveStatus = "saved";
@@ -478,6 +481,10 @@ function normalizeScout(record) {
 	const lastName = getScoutLastName(record);
 	const name =
 		[firstName, lastName].filter(Boolean).join(" ") || record.name;
+	const rank =
+		Object.prototype.hasOwnProperty.call(record, "rank")
+			? String(record.rank || "").trim()
+			: "Scout";
 	return {
 		id: record.id,
 		name,
@@ -492,7 +499,7 @@ function normalizeScout(record) {
 		gender: record.gender || "not specified",
 		patrol,
 		patrolBadge: getPatrolBadgeValue(patrol, record.patrolBadge),
-		rank: record.rank || "Scout",
+		rank,
 		leadershipRole:
 			!patrol && isPatrolSpecificRole(leadershipRole)
 				? ""
@@ -1027,21 +1034,30 @@ async function addNewScout() {
 function syncScoutRecordFromEditor(scoutId) {
 	const scout = scouts.find((entry) => entry.id === scoutId);
 	if (!scout) return null;
-	const nextFirstName = document
-		.querySelector("[data-scout-edit-first-name]")
-		?.value.trim();
-	const nextLastName = document
-		.querySelector("[data-scout-edit-last-name]")
-		?.value.trim();
-	const nextNickname = document
-		.querySelector("[data-scout-edit-nickname]")
-		?.value.trim();
-	const nextGender = document
-		.querySelector("[data-scout-edit-gender]")
-		?.value.trim();
-	const nextRank = document
-		.querySelector("[data-scout-edit-rank]")
-		?.value.trim();
+	const firstNameInput = document.querySelector(
+		"[data-scout-edit-first-name]",
+	);
+	const lastNameInput = document.querySelector(
+		"[data-scout-edit-last-name]",
+	);
+	const nicknameInput = document.querySelector(
+		"[data-scout-edit-nickname]",
+	);
+	const genderInput = document.querySelector("[data-scout-edit-gender]");
+	const nextFirstName = firstNameInput
+		? firstNameInput.value.trim()
+		: getScoutFirstName(scout);
+	const nextLastName = lastNameInput
+		? lastNameInput.value.trim()
+		: getScoutLastName(scout);
+	const nextNickname = nicknameInput
+		? nicknameInput.value.trim()
+		: getScoutNickname(scout);
+	const nextGender = genderInput
+		? genderInput.value.trim()
+		: scout.gender;
+	const rankInput = document.querySelector("[data-scout-edit-rank]");
+	const nextRank = rankInput ? rankInput.value.trim() : scout.rank;
 	const nextPatrol =
 		document.querySelector("[data-scout-edit-patrol]")?.value ??
 		scout.patrol;
@@ -1053,13 +1069,13 @@ function syncScoutRecordFromEditor(scoutId) {
 			? ""
 			: requestedRole;
 	scout.firstName = nextFirstName || getScoutFirstName(scout);
-	scout.lastName = nextLastName || "";
+	scout.lastName = nextLastName;
 	scout.name = [scout.firstName, scout.lastName]
 		.filter(Boolean)
 		.join(" ");
 	scout.nickname = nextNickname || getDefaultScoutNickname(scout);
 	scout.gender = nextGender || "not specified";
-	scout.rank = nextRank || "Scout";
+	scout.rank = nextRank;
 	scout.patrol = nextPatrol;
 	scout.patrolBadge = getPatrolBadgeValue(
 		nextPatrol,
@@ -1074,20 +1090,32 @@ async function saveScoutRecordFromEditor(scoutId) {
 		scoutRecordAutosaveTimer = null;
 	}
 	if (!scoutId || !canEditScoutRecord(scoutId)) return false;
-	const scout = syncScoutRecordFromEditor(scoutId);
-	if (!scout) return false;
+	if (scoutRecordSaveInProgress) {
+		scoutRecordPendingSaveId = scoutId;
+		setScoutRecordSaveStatus("dirty");
+		return false;
+	}
 	clearEditableError();
-	setScoutRecordSaveStatus("saving");
+	scoutRecordSaveInProgress = true;
 	try {
-		await saveScoutRecord(scout);
+		let activeScoutId = scoutId;
+		while (activeScoutId) {
+			scoutRecordPendingSaveId = "";
+			const scout = syncScoutRecordFromEditor(activeScoutId);
+			if (!scout) return false;
+			setScoutRecordSaveStatus("saving");
+			await saveScoutRecord(scout);
+			rebuildDerivedData();
+			activeScoutId = scoutRecordPendingSaveId;
+		}
 		setScoutRecordSaveStatus("saved");
-		rebuildDerivedData();
-		renderRoute();
 		return true;
 	} catch (error) {
 		setScoutRecordSaveStatus("dirty");
 		setEditableError(error, "Could not save this scout record.");
 		return false;
+	} finally {
+		scoutRecordSaveInProgress = false;
 	}
 }
 function queueScoutRecordAutosave(scoutId) {
