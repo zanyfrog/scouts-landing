@@ -1,10 +1,25 @@
 // Event, calendar, reservation, and event-gallery functionality used by app.js.
 // Loaded before app.js so these browser globals are available to the main router.
 let renderCalendarHighlightsSectionFromLib = null;
+let attachLeadershipPositionFieldHandlersFromLib = null;
+let collectLeadershipPositionValuesFromLib = null;
+let normalizeLeadershipPositionsFromLib = null;
+let renderLeadershipPositionFieldFromLib = null;
 const scoutsLibReady = import("./scouts-lib/index.js")
 	.then((module) => {
 		renderCalendarHighlightsSectionFromLib =
 			module.renderCalendarHighlightsSection;
+		attachLeadershipPositionFieldHandlersFromLib =
+			module.attachLeadershipPositionFieldHandlers;
+		collectLeadershipPositionValuesFromLib =
+			module.collectLeadershipPositionValues;
+		normalizeLeadershipPositionsFromLib =
+			module.normalizeLeadershipPositions;
+		renderLeadershipPositionFieldFromLib =
+			module.renderLeadershipPositionField;
+		if (attachLeadershipPositionFieldHandlersFromLib) {
+			attachLeadershipPositionFieldHandlersFromLib(document);
+		}
 	})
 	.catch((error) => {
 		console.warn("Could not load scouts-lib calendar highlights.", error);

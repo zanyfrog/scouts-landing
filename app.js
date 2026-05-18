@@ -295,6 +295,119 @@ const scoutRankOrder = {
 	"Scout Rank": 2,
 	Bobcat: 1,
 };
+function normalizeScoutLeadershipRoles(value, patrol = "") {
+	const roles = normalizeLeadershipPositionsFromLib
+		? normalizeLeadershipPositionsFromLib(value, scoutLeadershipOptions)
+		: [
+				...new Set(
+					(Array.isArray(value)
+						? value
+						: String(value || "")
+								.split(/[;,|]/)
+								.map((item) => item.trim())
+					).filter((item) => scoutLeadershipOptions.includes(item)),
+				),
+			];
+	return String(patrol || "").trim()
+		? roles
+		: roles.filter((role) => !isPatrolSpecificRole(role));
+}
+function getScoutLeadershipRoles(scout) {
+	return normalizeScoutLeadershipRoles(
+		Array.isArray(scout?.leadershipRoles) && scout.leadershipRoles.length
+			? scout.leadershipRoles
+			: scout?.leadershipRole,
+		scout?.patrol,
+	);
+}
+function getPrimaryScoutLeadershipRole(scout) {
+	return getScoutLeadershipRoles(scout)[0] || "";
+}
+function scoutHasLeadershipRole(scout, role) {
+	return getScoutLeadershipRoles(scout).includes(role);
+}
+function setScoutLeadershipRoles(scout, roles) {
+	const nextRoles = normalizeScoutLeadershipRoles(roles, scout?.patrol);
+	scout.leadershipRoles = nextRoles;
+	scout.leadershipRole = nextRoles.join("; ");
+}
+function addScoutLeadershipRole(scout, role) {
+	setScoutLeadershipRoles(scout, [...getScoutLeadershipRoles(scout), role]);
+}
+function removeScoutLeadershipRoles(scout, roles) {
+	const removed = new Set(roles);
+	setScoutLeadershipRoles(
+		scout,
+		getScoutLeadershipRoles(scout).filter((role) => !removed.has(role)),
+	);
+}
+function getScoutLeadershipLabel(scout) {
+	const roles = getScoutLeadershipRoles(scout);
+	return roles.length ? roles.join(", ") : "";
+}
+function renderScoutLeadershipPositionField(scout) {
+	if (renderLeadershipPositionFieldFromLib) {
+		return renderLeadershipPositionFieldFromLib({
+			positions: scoutLeadershipOptions.filter(Boolean),
+			selected: getScoutLeadershipRoles(scout),
+			name: "scoutLeadershipPositions",
+			label: "Leadership position",
+		});
+	}
+	const roles = new Set(getScoutLeadershipRoles(scout));
+	const summary = roles.size
+		? [...roles]
+				.map(
+					(role) =>
+						`<span class="leadership-position-chip">${role}</span>`,
+				)
+				.join("")
+		: `<span class="leadership-position-placeholder">Not assigned</span>`;
+	return `<details class="leadership-position-combobox" data-leadership-position-field><summary class="leadership-position-summary"><span class="leadership-position-summary-label">Leadership position</span><span class="leadership-position-summary-values" data-leadership-position-summary>${summary}</span><span class="leadership-position-summary-action" aria-hidden="true">Edit</span></summary><fieldset class="leadership-position-field"><legend>Leadership position</legend><div class="leadership-position-options"><label class="leadership-position-option leadership-position-empty"><input type="checkbox" data-leadership-position-empty name="scoutLeadershipPositions" value=""${roles.size ? "" : " checked"} /><span>Not assigned</span></label>${scoutLeadershipOptions
+		.filter(Boolean)
+		.map(
+			(role) =>
+				`<label class="leadership-position-option"><input type="checkbox" data-leadership-position-option name="scoutLeadershipPositions" value="${role}"${roles.has(role) ? " checked" : ""} /><span>${role}</span></label>`,
+		)
+		.join("")}</div></fieldset></details>`;
+}
+function syncLeadershipPositionFieldState(input) {
+	const field = input?.closest?.("[data-leadership-position-field]");
+	if (!field) return;
+	const empty = field.querySelector("[data-leadership-position-empty]");
+	const options = [...field.querySelectorAll("[data-leadership-position-option]")];
+	if (input.matches("[data-leadership-position-empty]") && input.checked) {
+		options.forEach((option) => {
+			option.checked = false;
+		});
+		updateLeadershipPositionSummary(field);
+		return;
+	}
+	if (input.matches("[data-leadership-position-option]") && input.checked) {
+		if (empty) empty.checked = false;
+		updateLeadershipPositionSummary(field);
+		return;
+	}
+	if (empty && !options.some((option) => option.checked)) {
+		empty.checked = true;
+	}
+	updateLeadershipPositionSummary(field);
+}
+function updateLeadershipPositionSummary(field) {
+	const summary = field.querySelector("[data-leadership-position-summary]");
+	if (!summary) return;
+	const selected = [
+		...field.querySelectorAll("[data-leadership-position-option]:checked"),
+	].map((input) => input.value);
+	summary.innerHTML = selected.length
+		? selected
+				.map(
+					(role) =>
+						`<span class="leadership-position-chip">${role}</span>`,
+				)
+				.join("")
+		: `<span class="leadership-position-placeholder">Not assigned</span>`;
+}
 const eventEditorFieldSelector =
 	"[data-event-edit-title], [data-event-edit-category], [data-event-edit-start], [data-event-edit-end], [data-event-edit-home-base], [data-event-edit-audience], [data-event-edit-description], [data-event-edit-note], [data-event-edit-registration-required], [data-event-edit-upcoming], [data-event-edit-repeat-enabled], [data-event-edit-repeat-frequency], [data-event-edit-repeat-interval], [data-event-edit-repeat-until], [data-event-edit-repeat-monthly-pattern], [data-event-edit-repeat-monthly-ordinal], [data-event-edit-repeat-monthly-weekday], [data-gallery-title], [data-gallery-description], [data-activity-description], [data-activity-location], [data-activity-start], [data-activity-end]";
 let eventAutosaveTimer = null;
@@ -476,7 +589,13 @@ function getPatrolNameList(extraPatrols = [], options = {}) {
 }
 function normalizeScout(record) {
 	const patrol = String(record.patrol || "").trim();
-	const leadershipRole = record.leadershipRole || "";
+	const leadershipRoles = normalizeScoutLeadershipRoles(
+		Array.isArray(record.leadershipRoles) && record.leadershipRoles.length
+			? record.leadershipRoles
+			: record.leadershipRole || "",
+		patrol,
+	);
+	const leadershipRole = leadershipRoles[0] || "";
 	const firstName = getScoutFirstName(record);
 	const lastName = getScoutLastName(record);
 	const name =
@@ -500,10 +619,8 @@ function normalizeScout(record) {
 		patrol,
 		patrolBadge: getPatrolBadgeValue(patrol, record.patrolBadge),
 		rank,
-		leadershipRole:
-			!patrol && isPatrolSpecificRole(leadershipRole)
-				? ""
-				: leadershipRole,
+		leadershipRole,
+		leadershipRoles,
 		avatar: String(record.avatar || "").trim() || defaultScoutAvatar,
 		parents: [],
 	};
@@ -567,7 +684,8 @@ function serializeScout(scout) {
 		patrol: scout.patrol,
 		patrolBadge: getPatrolBadgeValue(scout.patrol, scout.patrolBadge),
 		rank: scout.rank,
-		leadershipRole: scout.leadershipRole,
+		leadershipRole: getScoutLeadershipRoles(scout).join("; "),
+		leadershipRoles: getScoutLeadershipRoles(scout),
 		avatar: getScoutAvatar(scout),
 	};
 }
@@ -633,8 +751,8 @@ function sortScoutsByRankWithinPatrol(items) {
 	);
 }
 function getPatrolRosterLeadershipValue(scout) {
-	if (scout?.leadershipRole === "Patrol Leader") return 0;
-	if (scout?.leadershipRole === "Assistant Patrol Leader") return 1;
+	if (scoutHasLeadershipRole(scout, "Patrol Leader")) return 0;
+	if (scoutHasLeadershipRole(scout, "Assistant Patrol Leader")) return 1;
 	return 2;
 }
 function sortScoutsForPatrolRoster(items) {
@@ -791,7 +909,7 @@ function renderAttendanceRowsForItem(item) {
 							scout,
 							index,
 						);
-						return `<tr><td>${renderScoutName(scout, { className: "text-link" })}</td><td>${scout.rank}</td><td>${scout.leadershipRole || "-"}</td><td><span class="attendance-badge ${status === "Present" ? "present" : "absent"}">${status}</span></td><td>${scout.parents.map((parent) => `${parent.relationship}: ${parent.name}`).join("<br />")}</td></tr>`;
+						return `<tr><td>${renderScoutName(scout, { className: "text-link" })}</td><td>${scout.rank}</td><td>${getScoutLeadershipLabel(scout) || "-"}</td><td><span class="attendance-badge ${status === "Present" ? "present" : "absent"}">${status}</span></td><td>${scout.parents.map((parent) => `${parent.relationship}: ${parent.name}`).join("<br />")}</td></tr>`;
 					})
 					.join("")}</tbody>
 </table>
@@ -892,7 +1010,7 @@ function renderAdultDirectoryActionCell(adult, leaderAssignment) {
 }
 function renderScoutDirectoryActionCell(scout) {
 	const scoutRouteId = encodeURIComponent(String(scout.id || ""));
-	return `<span class="scout-directory-actions"><a class="icon-button scout-edit-icon" href="#/scouts/${scoutRouteId}" aria-label="Edit ${scout.name}" title="Edit ${scout.name}">&#9998;</a><button class="icon-button remove-record-icon" type="button" data-delete-scout-record="${scoutRouteId}" aria-label="Remove ${scout.name}" title="Remove ${scout.name}">${renderTrashIcon()}</button></span>`;
+	return `<span class="scout-directory-actions"><a class="button secondary scout-edit-button" href="#/scouts/${scoutRouteId}" aria-label="Edit ${scout.name}" title="Edit ${scout.name}">Edit</a><button class="icon-button remove-record-icon" type="button" data-delete-scout-record="${scoutRouteId}" aria-label="Remove ${scout.name}" title="Remove ${scout.name}">${renderTrashIcon()}</button></span>`;
 }
 function renderTrashIcon() {
 	return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-2 6h10l-.7 11H7.7L7 9Zm3 2v7h2v-7h-2Zm4 0v7h2v-7h-2Z" fill="currentColor"/></svg>`;
@@ -903,8 +1021,9 @@ function renderAddScoutIcon() {
 </button>`;
 }
 function renderScoutDirectoryNameCell(scout, scoutLabel) {
-	const leaderIcon = scout.leadershipRole
-		? `<img class="leader-emblem scout-directory-leader-icon" src="${getScoutLeadershipEmblem(scout.leadershipRole)}" alt="${scout.leadershipRole} emblem" title="${scout.leadershipRole}" />`
+	const primaryRole = getPrimaryScoutLeadershipRole(scout);
+	const leaderIcon = primaryRole
+		? `<img class="leader-emblem scout-directory-leader-icon" src="${getScoutLeadershipEmblem(primaryRole)}" alt="${primaryRole} emblem" title="${getScoutLeadershipLabel(scout)}" />`
 		: `<span class="scout-directory-leader-placeholder" aria-hidden="true">
 </span>`;
 	return `<span class="scout-directory-name">${leaderIcon}${renderScoutName(scout, { className: "text-link", newTab: false, label: scoutLabel })}</span>`;
@@ -1061,13 +1180,20 @@ function syncScoutRecordFromEditor(scoutId) {
 	const nextPatrol =
 		document.querySelector("[data-scout-edit-patrol]")?.value ??
 		scout.patrol;
-	const requestedRole =
-		document.querySelector("[data-scout-edit-role]")?.value || "";
-	const nextRole =
-		!String(nextPatrol || "").trim() &&
-		isPatrolSpecificRole(requestedRole)
-			? ""
-			: requestedRole;
+	const requestedRoles = collectLeadershipPositionValuesFromLib
+		? collectLeadershipPositionValuesFromLib(
+				document,
+				"scoutLeadershipPositions",
+			)
+		: [
+				...document.querySelectorAll(
+					'[data-leadership-position-option][name="scoutLeadershipPositions"]:checked',
+				),
+			].map((input) => input.value);
+	const nextRoles = normalizeScoutLeadershipRoles(
+		requestedRoles,
+		nextPatrol,
+	);
 	scout.firstName = nextFirstName || getScoutFirstName(scout);
 	scout.lastName = nextLastName;
 	scout.name = [scout.firstName, scout.lastName]
@@ -1081,7 +1207,8 @@ function syncScoutRecordFromEditor(scoutId) {
 		nextPatrol,
 		scout.patrolBadge,
 	);
-	scout.leadershipRole = nextRole;
+	scout.leadershipRoles = nextRoles;
+	scout.leadershipRole = nextRoles.join("; ");
 	return scout;
 }
 async function saveScoutRecordFromEditor(scoutId) {
@@ -1407,7 +1534,7 @@ function rebuildDerivedData() {
 		{
 			title: "Troop youth leadership",
 			members: roster.filter((scout) =>
-				[
+				getScoutLeadershipRoles(scout).some((role) => [
 					"Senior Patrol Leader",
 					"Assistant Senior Patrol Leader",
 					"Scribe",
@@ -1422,15 +1549,15 @@ function rebuildDerivedData() {
 					"Den Chief",
 					"Troop Guide",
 					"OA Representative",
-				].includes(scout.leadershipRole),
+				].includes(role)),
 			),
 		},
 		{
 			title: "Patrol leadership",
 			members: roster.filter(
 				(scout) =>
-					scout.leadershipRole === "Patrol Leader" ||
-					scout.leadershipRole === "Assistant Patrol Leader",
+					scoutHasLeadershipRole(scout, "Patrol Leader") ||
+					scoutHasLeadershipRole(scout, "Assistant Patrol Leader"),
 			),
 		},
 	];
@@ -1455,12 +1582,20 @@ const troopYouthLeadershipOrder = [
 function getTroopYouthLeadershipMembers() {
 	return roster
 		.filter((scout) =>
-			troopYouthLeadershipOrder.includes(scout.leadershipRole),
+			getScoutLeadershipRoles(scout).some((role) =>
+				troopYouthLeadershipOrder.includes(role),
+			),
 		)
 		.sort((a, b) => {
+			const aRole = getScoutLeadershipRoles(a).find((role) =>
+				troopYouthLeadershipOrder.includes(role),
+			);
+			const bRole = getScoutLeadershipRoles(b).find((role) =>
+				troopYouthLeadershipOrder.includes(role),
+			);
 			const roleDelta =
-				troopYouthLeadershipOrder.indexOf(a.leadershipRole) -
-				troopYouthLeadershipOrder.indexOf(b.leadershipRole);
+				troopYouthLeadershipOrder.indexOf(aRole) -
+				troopYouthLeadershipOrder.indexOf(bRole);
 			if (roleDelta !== 0) return roleDelta;
 			return a.name.localeCompare(b.name);
 		});
@@ -1473,12 +1608,15 @@ function getPatrolLeadershipGroups() {
 			);
 			const patrolLeader =
 				patrolMembers.find(
-					(scout) => scout.leadershipRole === "Patrol Leader",
+					(scout) => scoutHasLeadershipRole(scout, "Patrol Leader"),
 				) || null;
 			const assistantPatrolLeader =
 				patrolMembers.find(
 					(scout) =>
-						scout.leadershipRole === "Assistant Patrol Leader",
+						scoutHasLeadershipRole(
+							scout,
+							"Assistant Patrol Leader",
+						),
 				) || null;
 			return {
 				patrol,
@@ -1492,8 +1630,12 @@ function getPatrolLeadershipGroups() {
 		);
 }
 function renderTroopYouthLeadershipCard(member) {
+	const role =
+		getScoutLeadershipRoles(member).find((item) =>
+			troopYouthLeadershipOrder.includes(item),
+		) || getPrimaryScoutLeadershipRole(member);
 	return `<div class="org-card troop-leadership-card">
-<strong>${member.leadershipRole}</strong>
+<strong>${role}</strong>
 <span>${renderScoutName(member, { className: "text-link" })}</span>
 <small>${getPatrolDisplayName(member.patrol)}</small>
 </div>`;
@@ -1525,11 +1667,15 @@ function getPatrolRowsForEditor() {
 		);
 		const patrolLeader =
 			patrolScouts.find(
-				(scout) => scout.leadershipRole === "Patrol Leader",
+				(scout) => scoutHasLeadershipRole(scout, "Patrol Leader"),
 			) || null;
 		const assistantPatrolLeader =
 			patrolScouts.find(
-				(scout) => scout.leadershipRole === "Assistant Patrol Leader",
+				(scout) =>
+					scoutHasLeadershipRole(
+						scout,
+						"Assistant Patrol Leader",
+					),
 			) || null;
 		return {
 			patrol,
@@ -1777,12 +1923,10 @@ async function savePatrolEditorChanges() {
 	);
 
 	scouts.forEach((scout) => {
-		if (
-			scout.leadershipRole === "Patrol Leader" ||
-			scout.leadershipRole === "Assistant Patrol Leader"
-		) {
-			scout.leadershipRole = "";
-		}
+		removeScoutLeadershipRoles(scout, [
+			"Patrol Leader",
+			"Assistant Patrol Leader",
+		]);
 	});
 
 	nextRows.forEach(
@@ -1816,7 +1960,7 @@ async function savePatrolEditorChanges() {
 			if (patrolLeader) {
 				patrolLeader.patrol = nextPatrol;
 				patrolLeader.patrolBadge = nextBadge;
-				patrolLeader.leadershipRole = "Patrol Leader";
+				addScoutLeadershipRole(patrolLeader, "Patrol Leader");
 			}
 			const assistantPatrolLeader = scouts.find(
 				(scout) => scout.id === assistantPatrolLeaderId,
@@ -1824,8 +1968,10 @@ async function savePatrolEditorChanges() {
 			if (assistantPatrolLeader) {
 				assistantPatrolLeader.patrol = nextPatrol;
 				assistantPatrolLeader.patrolBadge = nextBadge;
-				assistantPatrolLeader.leadershipRole =
-					"Assistant Patrol Leader";
+				addScoutLeadershipRole(
+					assistantPatrolLeader,
+					"Assistant Patrol Leader",
+				);
 			}
 		},
 	);
@@ -2414,7 +2560,7 @@ const renderLeadershipSummary = () =>
 <p>Youth and adult leadership assignments loaded into the prototype.</p>
 </div>
 <ul class="detail-list">
-<li>Scout leadership positions filled: ${roster.filter((scout) => scout.leadershipRole).length}</li>
+<li>Scout leadership positions filled: ${roster.filter((scout) => getScoutLeadershipRoles(scout).length).length}</li>
 <li>Adult leadership positions filled: ${adultLeaders.length}</li>
 <li>
 <a class="text-link" href="#/org-chart">Open troop org chart</a>
@@ -2450,7 +2596,7 @@ function renderAdultScoutRosterPanel({ showFilter = true } = {}) {
 			)
 				.map(
 					(scout) =>
-						`<span class="child-chip scout-roster-chip" data-scout-filter-item data-scout-name="${scout.name.toLowerCase()}" data-scout-patrol="${patrolName.toLowerCase()}" data-scout-rank="${String(scout.rank || "").toLowerCase()}">${renderScoutName(scout, { className: "text-link" })}<small>${scout.rank}${scout.leadershipRole ? ` - ${scout.leadershipRole}` : ""}</small>
+						`<span class="child-chip scout-roster-chip" data-scout-filter-item data-scout-name="${scout.name.toLowerCase()}" data-scout-patrol="${patrolName.toLowerCase()}" data-scout-rank="${String(scout.rank || "").toLowerCase()}">${renderScoutName(scout, { className: "text-link" })}<small>${scout.rank}${getScoutLeadershipLabel(scout) ? ` - ${getScoutLeadershipLabel(scout)}` : ""}</small>
 </span>`,
 				)
 				.join("")}</div></article>`;
@@ -2516,7 +2662,7 @@ ${renderAddScoutIcon()}
 		.map((scout) => {
 			const patrolName = getPatrolDisplayName(scout.patrol);
 			const scoutLabel = getScoutDirectoryName(scout);
-			return `<tr data-scout-filter-item data-scout-name="${`${scout.name} ${getScoutNickname(scout)}`.toLowerCase()}" data-scout-patrol="${patrolName.toLowerCase()}" data-scout-rank="${String(scout.rank || "").toLowerCase()}"><td>${renderScoutDirectoryActionCell(scout)}</td><td>${renderScoutDirectoryNameCell(scout, scoutLabel)}</td><td>${patrolName}</td><td>${scout.rank}</td><td>${scout.parents.length ? `<div class="adult-children-list compact">${scout.parents.map((parent) => `<span class="child-chip"><a class="text-link" href="#/adults/${parent.adultId}">${parent.relationship}: ${parent.name}</a></span>`).join("")}</div>` : "No linked adults"}</td></tr>`;
+			return `<tr data-scout-filter-item data-scout-name="${`${scout.name} ${getScoutNickname(scout)}`.toLowerCase()}" data-scout-patrol="${patrolName.toLowerCase()}" data-scout-rank="${String(scout.rank || "").toLowerCase()}"><td data-label="Edit">${renderScoutDirectoryActionCell(scout)}</td><td data-label="Scout">${renderScoutDirectoryNameCell(scout, scoutLabel)}</td><td data-label="Patrol">${patrolName}</td><td data-label="Rank">${scout.rank}</td><td data-label="Linked adults">${scout.parents.length ? `<div class="adult-children-list compact">${scout.parents.map((parent) => `<span class="child-chip"><a class="text-link" href="#/adults/${parent.adultId}">${parent.relationship}: ${parent.name}</a></span>`).join("")}</div>` : "No linked adults"}</td></tr>`;
 		})
 		.join("")}</tbody>
 </table>
@@ -2679,7 +2825,7 @@ function renderScribeIndex() {
 <ul class="detail-list">
 <li>Total scouts: ${roster.length}</li>
 <li>Patrols: ${patrolNames.join(", ")}</li>
-<li>Leadership positions assigned: ${roster.filter((scout) => scout.leadershipRole).length}</li>
+<li>Leadership positions assigned: ${roster.filter((scout) => getScoutLeadershipRoles(scout).length).length}</li>
 </ul>
 </article>
 </section>`;
@@ -2728,7 +2874,7 @@ function renderScribeIndex() {
 <ul class="detail-list">
 <li>Total scouts: ${roster.length}</li>
 <li>Patrols: ${patrolNames.join(", ")}</li>
-<li>Leadership positions assigned: ${roster.filter((scout) => scout.leadershipRole).length}</li>
+<li>Leadership positions assigned: ${roster.filter((scout) => getScoutLeadershipRoles(scout).length).length}</li>
 </ul>
 </article>
 <article class="panel">
@@ -2765,7 +2911,7 @@ function renderScribeEvent() {
 <td>${renderScoutName(scout, { className: "text-link" })}</td>
 <td>${scout.gender}</td>
 <td>${scout.rank}</td>
-<td>${scout.leadershipRole || "-"}</td>
+<td>${getScoutLeadershipLabel(scout) || "-"}</td>
 <td>
 <span class="attendance-badge ${scout.attendance === "Present" ? "present" : "absent"}">${scout.attendance}</span>
 </td>
@@ -2794,7 +2940,7 @@ function renderScribePrint() {
 					.map(
 						(scout) => `<tr>
 <td>${renderScoutName(scout, { className: "text-link" })}</td>
-<td>${scout.leadershipRole || "-"}</td>
+<td>${getScoutLeadershipLabel(scout) || "-"}</td>
 <td class="blank-cell">
 </td>
 </tr>`,
@@ -2975,7 +3121,7 @@ function renderScribeMonthly() {
 <th>Parent / Guardian 2</th>
 </tr>
 </thead>
-<tbody>${roster.map((scout) => `<tr><td>${renderScoutName(scout, { className: "text-link" })}</td><td>${getPatrolDisplayName(scout.patrol)}</td><td>${scout.gender}</td><td>${scout.rank}</td><td>${scout.leadershipRole || "-"}</td><td>${scout.parents[0]?.name || "-"}</td><td>${scout.parents[1]?.name || "-"}</td></tr>`).join("")}</tbody>
+<tbody>${roster.map((scout) => `<tr><td>${renderScoutName(scout, { className: "text-link" })}</td><td>${getPatrolDisplayName(scout.patrol)}</td><td>${scout.gender}</td><td>${scout.rank}</td><td>${getScoutLeadershipLabel(scout) || "-"}</td><td>${scout.parents[0]?.name || "-"}</td><td>${scout.parents[1]?.name || "-"}</td></tr>`).join("")}</tbody>
 </table>
 </div>
 </div>
@@ -3537,7 +3683,7 @@ function renderScoutOrgChartEditor() {
 <th>Badge</th>
 </tr>
 </thead>
-<tbody>${roster.map((scout) => `<tr><td><a class="text-link" href="#/scouts/${scout.id}" target="_blank" rel="noreferrer">${scout.name}</a></td><td>${scout.parents.length ? scout.parents.map((parent) => `${parent.relationship}: ${parent.name}`).join("<br />") : "No linked adults"}</td><td>${getPatrolDisplayName(scout.patrol)}</td><td>${scout.leadershipRole || "Not assigned"}</td><td><span class="leader-identity"><img class="leader-emblem" src="${getPatrolBadgeImage(scout.patrol)}" alt="${getPatrolDisplayName(scout.patrol)} badge" /><span>${scout.patrol ? scout.patrolBadge : unassignedPatrolLabel}</span></span></td></tr>`).join("")}</tbody>
+<tbody>${roster.map((scout) => `<tr><td><a class="text-link" href="#/scouts/${scout.id}" target="_blank" rel="noreferrer">${scout.name}</a></td><td>${scout.parents.length ? scout.parents.map((parent) => `${parent.relationship}: ${parent.name}`).join("<br />") : "No linked adults"}</td><td>${getPatrolDisplayName(scout.patrol)}</td><td>${getScoutLeadershipLabel(scout) || "Not assigned"}</td><td><span class="leader-identity"><img class="leader-emblem" src="${getPatrolBadgeImage(scout.patrol)}" alt="${getPatrolDisplayName(scout.patrol)} badge" /><span>${scout.patrol ? scout.patrolBadge : unassignedPatrolLabel}</span></span></td></tr>`).join("")}</tbody>
 </table>
 </div>
 </div>
@@ -3651,10 +3797,9 @@ ${renderEditableError()}
 <img class="leader-emblem scout-patrol-badge-preview" data-scout-patrol-badge-preview src="${getPatrolBadgeImage(scout.patrol)}" alt="${getPatrolDisplayName(scout.patrol)} badge" />
 </div>
 </label>
-<label>
-<span>Leadership position</span>
-<select data-scout-edit-role aria-label="Scout leadership position">${scoutLeadershipOptions.map((role) => `<option value="${role}"${role === scout.leadershipRole ? " selected" : ""}>${role || "Not assigned"}</option>`).join("")}</select>
-</label>
+<div class="scout-leadership-editor">
+${renderScoutLeadershipPositionField(scout)}
+</div>
 </div>
 <div class="scout-detail-guardians">
 <span class="scout-detail-label">Parents / guardians</span>
@@ -5340,7 +5485,7 @@ document.addEventListener("focusout", async (event) => {
 		"[data-scout-edit-patrol]",
 	);
 	const scoutRoleInput = event.target.closest(
-		"[data-scout-edit-role]",
+		"[data-leadership-position-empty], [data-leadership-position-option]",
 	);
 	if (
 		scoutFirstNameInput ||
@@ -5351,6 +5496,7 @@ document.addEventListener("focusout", async (event) => {
 		scoutPatrolInput ||
 		scoutRoleInput
 	) {
+		if (scoutRoleInput) syncLeadershipPositionFieldState(scoutRoleInput);
 		queueScoutRecordAutosave(
 			(window.location.hash || "").replace("#/scouts/", ""),
 		);
@@ -5412,9 +5558,16 @@ document.addEventListener("change", async (event) => {
 	}
 
 	const scoutRecordSelect = event.target.closest(
-		"[data-scout-edit-gender], [data-scout-edit-rank], [data-scout-edit-role]",
+		"[data-scout-edit-gender], [data-scout-edit-rank], [data-leadership-position-empty], [data-leadership-position-option]",
 	);
 	if (scoutRecordSelect) {
+		if (
+			scoutRecordSelect.matches(
+				"[data-leadership-position-empty], [data-leadership-position-option]",
+			)
+		) {
+			syncLeadershipPositionFieldState(scoutRecordSelect);
+		}
 		queueScoutRecordAutosave(
 			(window.location.hash || "").replace("#/scouts/", ""),
 		);
