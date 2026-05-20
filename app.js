@@ -21,6 +21,7 @@ const defaultEvents = [];
 let events = [];
 const loadedCalendarMonths = new Set();
 let holidays = [];
+let packingLists = [];
 const unassignedPatrolValue = "";
 const unassignedPatrolLabel = "Unassigned";
 const defaultScoutAvatar = "assets/default-scout-avatar.svg";
@@ -409,7 +410,7 @@ function updateLeadershipPositionSummary(field) {
 		: `<span class="leadership-position-placeholder">Not assigned</span>`;
 }
 const eventEditorFieldSelector =
-	"[data-event-edit-title], [data-event-edit-category], [data-event-edit-start], [data-event-edit-end], [data-event-edit-home-base], [data-event-edit-audience], [data-event-edit-description], [data-event-edit-note], [data-event-edit-registration-required], [data-event-edit-upcoming], [data-event-edit-repeat-enabled], [data-event-edit-repeat-frequency], [data-event-edit-repeat-interval], [data-event-edit-repeat-until], [data-event-edit-repeat-monthly-pattern], [data-event-edit-repeat-monthly-ordinal], [data-event-edit-repeat-monthly-weekday], [data-gallery-title], [data-gallery-description], [data-activity-description], [data-activity-location], [data-activity-start], [data-activity-end]";
+	"[data-event-edit-title], [data-event-edit-category], [data-event-edit-start], [data-event-edit-end], [data-event-edit-home-base], [data-event-edit-audience], [data-event-edit-description], [data-event-edit-note], [data-event-edit-registration-required], [data-event-edit-upcoming], [data-event-edit-repeat-enabled], [data-event-edit-repeat-frequency], [data-event-edit-repeat-interval], [data-event-edit-repeat-until], [data-event-edit-repeat-monthly-pattern], [data-event-edit-repeat-monthly-ordinal], [data-event-edit-repeat-monthly-weekday], [data-event-packing-list], [data-event-packing-item-name], [data-event-packing-item-category], [data-event-packing-item-quantity], [data-event-packing-item-scope], [data-event-packing-item-optional], [data-event-packing-item-notes], [data-gallery-title], [data-gallery-description], [data-activity-description], [data-activity-location], [data-activity-start], [data-activity-end]";
 let eventAutosaveTimer = null;
 let scoutRecordAutosaveTimer = null;
 let scoutRecordSaveInProgress = false;
@@ -2332,6 +2333,7 @@ function resetOrmBackedData() {
 	scoutLeadershipGroups = [];
 	events = [];
 	holidays = [];
+	packingLists = [];
 	currentRouteEvent = null;
 	loadedCalendarMonths.clear();
 	hydratedPublicEventIds.clear();
@@ -2382,6 +2384,10 @@ async function loadData() {
 	holidays = (Array.isArray(data.holidays) ? data.holidays : [])
 		.map(normalizeHoliday)
 		.filter((holiday) => holiday.date);
+	packingLists = (Array.isArray(data.packingLists)
+		? data.packingLists
+		: []
+	).map(normalizePackingList);
 	patrols = uniqueBy(
 		(Array.isArray(data.patrols) ? data.patrols : [])
 			.map(normalizePatrol)
@@ -2530,6 +2536,7 @@ const topNav = () => {
 	return `<nav class="top-nav">
 <a class="nav-pill${currentHash === "#/" || currentHash === "" ? " is-active" : ""}" href="#/">Home</a>
 <a class="nav-pill${currentHash.startsWith("#/events") ? " is-active" : ""}" href="#/events">Events</a>
+<a class="nav-pill${currentHash.startsWith("#/packing-lists") ? " is-active" : ""}" href="#/packing-lists">Packing Lists</a>
 <a class="nav-pill${currentHash.startsWith("#/resources") ? " is-active" : ""}" href="#/resources">Resources</a>${currentActor?.authenticated ? `<a class="nav-pill${currentHash.startsWith("#/scribe/attendance") ? " is-active" : ""}" href="#/scribe/attendance">Scribe Attendance</a>` : ""}${canEditScouts() ? `<a class="nav-pill${currentHash === "#/scouts" || currentHash.startsWith("#/scouts/") ? " is-active" : ""}" href="#/scouts">Scouts</a><a class="nav-pill${currentHash.startsWith("#/patrols") ? " is-active" : ""}" href="#/patrols">Patrols</a>` : ""}${canSeeOrgChart() ? `<a class="nav-pill${currentHash.startsWith("#/reservations") ? " is-active" : ""}" href="#/reservations">Reservations</a><a class="nav-pill${currentHash.startsWith("#/holidays") ? " is-active" : ""}" href="#/holidays">Holidays</a><a class="nav-pill${currentHash === "#/adult" || currentHash === "#/adults" || currentHash.startsWith("#/adults/") ? " is-active" : ""}" href="#/adults">Adults</a><a class="nav-pill${currentHash.startsWith("#/org-chart") ? " is-active" : ""}" href="#/org-chart">Org Chart</a>` : ""}<span class="nav-note">${currentActor?.authenticated ? `Signed in as ${getCurrentMode()}` : "Public visitor"}</span>
 </nav>`;
 };
@@ -3868,6 +3875,11 @@ function renderRoute() {
 		applyTitleAttributes();
 		return;
 	}
+	if (hash === "#/packing-lists") {
+		renderPackingListsRoute();
+		applyTitleAttributes();
+		return;
+	}
 	if (hash === "#/events") {
 		if (canSeeOrgChart()) {
 			renderEventsList();
@@ -4924,6 +4936,147 @@ document.addEventListener("click", async (event) => {
 			setEditableError(error, "Could not update this registration.");
 		}
 		renderRoute();
+		return;
+	}
+
+	const printPackingListButton = event.target.closest(
+		"[data-print-packing-list]",
+	);
+	if (printPackingListButton) {
+		event.preventDefault();
+		event.stopPropagation();
+		printPackingLibraryList(
+			printPackingListButton.closest("[data-packing-library-list]"),
+		);
+		return;
+	}
+
+	const addPackingListButton = event.target.closest("[data-add-packing-list]");
+	if (addPackingListButton) {
+		if (!canSeeOrgChart()) return;
+		syncPackingListsFromEditors();
+		packingLists.push(
+			normalizePackingList({
+				id: `packing-list-${Date.now()}`,
+				title: "New packing list",
+				description: "",
+				items: [],
+			}),
+		);
+		renderPackingListsRoute();
+		return;
+	}
+	const savePackingListsButton = event.target.closest(
+		"[data-save-packing-lists]",
+	);
+	if (savePackingListsButton) {
+		if (!canSeeOrgChart()) return;
+		syncPackingListsFromEditors();
+		await savePackingLists();
+		await loadData();
+		renderPackingListsRoute();
+		return;
+	}
+	const deletePackingListButton = event.target.closest(
+		"[data-delete-packing-list]",
+	);
+	if (deletePackingListButton) {
+		if (!canSeeOrgChart()) return;
+		clearEditableError();
+		try {
+			const response = await fetch(
+				`/api/packing-lists/${encodeURIComponent(deletePackingListButton.dataset.deletePackingList)}`,
+				{ method: "DELETE", headers: authHeaders() },
+			);
+			const payload = await response.json().catch(() => ({}));
+			if (!response.ok) {
+				throw new Error(
+					payload.error || "Could not delete packing list.",
+				);
+			}
+			await loadData();
+		} catch (error) {
+			setEditableError(error, "Could not delete packing list.");
+		}
+		renderPackingListsRoute();
+		return;
+	}
+	const addPackingItemButton = event.target.closest("[data-add-packing-item]");
+	if (addPackingItemButton) {
+		if (!canSeeOrgChart()) return;
+		syncPackingListsFromEditors();
+		const list = packingLists.find(
+			(item) => item.id === addPackingItemButton.dataset.addPackingItem,
+		);
+		if (list) {
+			list.items.push(
+				normalizePackingItem({
+					id: `packing-item-${Date.now()}`,
+					name: "",
+					category: "General",
+				}),
+			);
+		}
+		renderPackingListsRoute();
+		return;
+	}
+	const removePackingItemButton = event.target.closest(
+		"[data-remove-packing-item]",
+	);
+	if (removePackingItemButton) {
+		if (!canSeeOrgChart()) return;
+		const editor = removePackingItemButton.closest(
+			"[data-packing-list-editor]",
+		);
+		syncPackingListsFromEditors();
+		const list = packingLists.find(
+			(item) => item.id === editor?.dataset.packingListEditor,
+		);
+		if (list) {
+			list.items = list.items.filter(
+				(item) =>
+					item.id !== removePackingItemButton.dataset.removePackingItem,
+			);
+		}
+		renderPackingListsRoute();
+		return;
+	}
+	const addEventPackingItemButton = event.target.closest(
+		"[data-add-event-packing-item]",
+	);
+	if (addEventPackingItemButton) {
+		if (!canSeeOrgChart()) return;
+		const eventId = addEventPackingItemButton.dataset.addEventPackingItem;
+		const currentEvent = syncEventFromEditor(eventId);
+		if (currentEvent) {
+			currentEvent.packingItems = [
+				...(currentEvent.packingItems || []),
+				normalizePackingItem({
+					id: `event-packing-item-${Date.now()}`,
+					name: "",
+					category: "General",
+				}),
+			];
+			renderEventRoute(eventId);
+		}
+		return;
+	}
+	const removeEventPackingItemButton = event.target.closest(
+		"[data-remove-event-packing-item]",
+	);
+	if (removeEventPackingItemButton) {
+		if (!canSeeOrgChart()) return;
+		const eventId = getEventDetailRouteId();
+		const currentEvent = syncEventFromEditor(eventId);
+		if (currentEvent) {
+			currentEvent.packingItems = (currentEvent.packingItems || []).filter(
+				(item) =>
+					item.id !==
+					removeEventPackingItemButton.dataset.removeEventPackingItem,
+			);
+			queueEventAutosave(eventId);
+			renderEventRoute(eventId);
+		}
 		return;
 	}
 

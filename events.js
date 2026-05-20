@@ -96,6 +96,100 @@ function normalizeEventRegistration(record = {}) {
 		registeredAt: String(record.registeredAt || "").trim(),
 	};
 }
+function slugifyPackingValue(value, fallback = "item") {
+	const slug = String(value || "")
+		.trim()
+		.toLowerCase()
+		.replace(/&/g, " and ")
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return slug || fallback;
+}
+function normalizePackingItem(item = {}, index = 0) {
+	const name = String(item.name || item.item || "").trim();
+	const category = String(item.category || "General").trim() || "General";
+	return {
+		id:
+			String(item.id || "").trim() ||
+			`${slugifyPackingValue(category)}-${slugifyPackingValue(name, `item-${index + 1}`)}`,
+		name,
+		category,
+		quantity: String(item.quantity || "").trim(),
+		notes: String(item.notes || item.note || "").trim(),
+		required: item.required === false ? false : true,
+		scope: String(item.scope || "per-person").trim() || "per-person",
+	};
+}
+function normalizePackingList(list = {}, index = 0) {
+	const title = String(list.title || list.name || "").trim();
+	return {
+		id:
+			String(list.id || "").trim() ||
+			slugifyPackingValue(title, `packing-list-${index + 1}`),
+		title: title || "Untitled packing list",
+		description: String(list.description || "").trim(),
+		categories: Array.isArray(list.categories)
+			? list.categories.map((category) => String(category || "").trim()).filter(Boolean)
+			: [],
+		items: (Array.isArray(list.items) ? list.items : [])
+			.map((item, itemIndex) => normalizePackingItem(item, itemIndex))
+			.filter((item) => item.name),
+	};
+}
+function normalizeEventPackingListIds(value) {
+	return [...new Set((Array.isArray(value) ? value : [])
+		.map((id) => String(id || "").trim())
+		.filter(Boolean))];
+}
+function normalizeEventPackingItems(value) {
+	return (Array.isArray(value) ? value : [])
+		.map((item, index) => normalizePackingItem(item, index))
+		.filter((item) => item.name);
+}
+function normalizedPackingKey(value) {
+	return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+function packingQuantityRank(value) {
+	const match = String(value || "").match(/\d+(?:\.\d+)?/);
+	return match ? Number(match[0]) : String(value || "").trim() ? 1 : 0;
+}
+function mergePackingItems(existing, incoming) {
+	const next = { ...existing };
+	if (packingQuantityRank(incoming.quantity) > packingQuantityRank(next.quantity)) {
+		next.quantity = incoming.quantity;
+	}
+	next.required = Boolean(next.required || incoming.required);
+	next.notes = [...new Set([next.notes, incoming.notes].map((note) => String(note || "").trim()).filter(Boolean))].join(" ");
+	return next;
+}
+function collateEventPackingList(event) {
+	if (event?.collatedPackingList?.categories) {
+		return event.collatedPackingList;
+	}
+	const selectedIds = new Set(normalizeEventPackingListIds(event?.packingListIds));
+	const selectedLists = packingLists.filter((list) => selectedIds.has(list.id));
+	const itemsByKey = new Map();
+	[...selectedLists.flatMap((list) => list.items || []), ...normalizeEventPackingItems(event?.packingItems)]
+		.forEach((item) => {
+			const key = `${normalizedPackingKey(item.category)}:${normalizedPackingKey(item.name)}`;
+			itemsByKey.set(key, itemsByKey.has(key) ? mergePackingItems(itemsByKey.get(key), item) : item);
+		});
+	const categories = new Map();
+	[...itemsByKey.values()]
+		.sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
+		.forEach((item) => {
+			const category = item.category || "General";
+			categories.set(category, [...(categories.get(category) || []), item]);
+		});
+	return {
+		selectedListIds: [...selectedIds],
+		selectedLists: selectedLists.map((list) => ({ id: list.id, title: list.title })),
+		categories: [...categories.entries()].map(([name, items]) => ({
+			name,
+			items: items.sort((a, b) => a.name.localeCompare(b.name)),
+		})),
+	};
+}
 // Detects media type from file or URL metadata.
 function detectMediaType(value, mimeType = "") {
 	if (String(mimeType).startsWith("video/")) {
@@ -282,6 +376,9 @@ function normalizeEvent(record) {
 		repeatMonthlyPattern: record.repeatMonthlyPattern || "date",
 		repeatMonthlyOrdinal: record.repeatMonthlyOrdinal || "third",
 		repeatMonthlyWeekday: record.repeatMonthlyWeekday || "monday",
+		packingListIds: normalizeEventPackingListIds(record.packingListIds),
+		packingItems: normalizeEventPackingItems(record.packingItems),
+		collatedPackingList: record.collatedPackingList || null,
 	};
 }
 // Gets gallery images from editor for event routing, rendering, or filtering.
@@ -606,7 +703,10 @@ async function saveEvents() {
 		return { ...event, image, gallery };
 	});
 	await postJson("/api/events", {
-		events: events.map((event) => ({ ...event })),
+		events: events.map((event) => {
+			const { collatedPackingList, ...savedEvent } = event;
+			return savedEvent;
+		}),
 	});
 	storeEventsSnapshot();
 }
@@ -759,6 +859,46 @@ function syncEventFromEditor(eventId) {
 			?.value ||
 		event.repeatMonthlyWeekday ||
 		"monday";
+	event.packingListIds = [
+		...document.querySelectorAll("[data-event-packing-list]:checked"),
+	].map((input) => input.value);
+	event.packingItems = [
+		...document.querySelectorAll("[data-event-packing-item]"),
+	]
+		.map((row, index) =>
+			normalizePackingItem(
+				{
+					id:
+						row.dataset.eventPackingItem ||
+						`event-packing-item-${index + 1}`,
+					name:
+						row
+							.querySelector("[data-event-packing-item-name]")
+							?.value.trim() || "",
+					category:
+						row
+							.querySelector("[data-event-packing-item-category]")
+							?.value.trim() || "General",
+					quantity:
+						row
+							.querySelector("[data-event-packing-item-quantity]")
+							?.value.trim() || "",
+					notes:
+						row
+							.querySelector("[data-event-packing-item-notes]")
+							?.value.trim() || "",
+					required: !row.querySelector(
+						"[data-event-packing-item-optional]",
+					)?.checked,
+					scope:
+						row.querySelector("[data-event-packing-item-scope]")
+							?.value || "per-person",
+				},
+				index,
+			),
+		)
+		.filter((item) => item.name);
+	event.collatedPackingList = null;
 	event.activities = (event.activities || []).map(
 		(activity, index) => {
 			const nextActivityStart =
@@ -3394,6 +3534,206 @@ function renderEventsIndex() {
 </div>${renderCalendarEventShowcase(selectedCalendarEvent)}</section>`;
 	flushSelectedCalendarEventScroll();
 }
+function renderPackingItemLine(item, printMode = false) {
+	const meta = [
+		item.quantity ? `Qty ${item.quantity}` : "",
+		item.scope ? item.scope.replace("-", " ") : "",
+		item.required ? "" : "Optional",
+	]
+		.filter(Boolean)
+		.join(" · ");
+	return `<li class="packing-item${item.required ? "" : " optional"}">${printMode ? `<span class="print-checkbox" aria-hidden="true"></span>` : ""}<div><strong>${item.name}</strong>${meta ? `<span>${meta}</span>` : ""}${item.notes ? `<p>${item.notes}</p>` : ""}</div></li>`;
+}
+function renderCollatedPackingList(event, options = {}) {
+	const collated = collateEventPackingList(event);
+	const categories = collated.categories || [];
+	if (!categories.length) {
+		return options.editor
+			? `<article class="panel packing-preview-panel"><div class="panel-heading"><h3>Packing list preview</h3><p>No packing lists or event items selected.</p></div></article>`
+			: "";
+	}
+	const categoriesMarkup = `<div class="packing-category-grid">${categories
+		.map(
+			(category) => `<article class="panel packing-category-card">
+<div class="panel-heading"><h3>${category.name}</h3><p>${category.items.length} item${category.items.length === 1 ? "" : "s"}</p></div>
+<ul class="packing-item-list">${category.items.map((item) => renderPackingItemLine(item, true)).join("")}</ul>
+</article>`,
+		)
+		.join("")}</div>`;
+	if (options.editor) {
+		return `<section class="section packing-list-section${options.print ? " print-packing-list" : ""}">
+<div class="section-heading">
+<div>
+<p class="eyebrow">Packing list</p>
+<h2>Preview packing list</h2>
+</div>
+</div>
+${categoriesMarkup}
+</section>`;
+	}
+	return `<details class="section packing-list-section event-packing-list-details${options.print ? " print-packing-list" : ""}">
+<summary class="section-heading packing-list-summary event-packing-list-summary">
+<div>
+<p class="eyebrow">Packing list</p>
+<h2>Event packing list</h2>
+</div>
+<div class="scribe-actions"><button class="button secondary" type="button" onclick="event.stopPropagation(); this.closest('details').open = true; window.print()">Print</button></div>
+</summary>
+<div class="event-packing-list-body">
+${categoriesMarkup}
+</div>
+</details>`;
+}
+function renderEventPackingEditor(event) {
+	const selectedIds = new Set(event.packingListIds || []);
+	const itemRows = normalizeEventPackingItems(event.packingItems);
+	const listOptions = packingLists.length
+		? packingLists
+				.map(
+					(list) => `<label class="packing-list-option"><input type="checkbox" data-event-packing-list value="${list.id}"${selectedIds.has(list.id) ? " checked" : ""} /><span><strong>${list.title}</strong><small>${list.items.length} items</small></span></label>`,
+				)
+				.join("")
+		: `<p class="event-description">No prepared packing lists are available yet.</p>`;
+	const rows = itemRows
+		.map(
+			(item, index) => `<tr data-event-packing-item="${item.id || `event-packing-item-${index + 1}`}">
+<td data-label="Name"><input type="text" data-event-packing-item-name value="${item.name}" aria-label="Packing item name" /></td>
+<td data-label="Category"><input type="text" data-event-packing-item-category value="${item.category}" aria-label="Packing item category" /></td>
+<td data-label="Quantity"><input type="text" data-event-packing-item-quantity value="${item.quantity}" aria-label="Packing item quantity" /></td>
+<td data-label="Scope"><select data-event-packing-item-scope aria-label="Packing item scope"><option value="per-person"${item.scope === "per-person" ? " selected" : ""}>Per person</option><option value="per-patrol"${item.scope === "per-patrol" ? " selected" : ""}>Per patrol</option><option value="per-troop"${item.scope === "per-troop" ? " selected" : ""}>Per troop</option></select></td>
+<td data-label="Optional"><label class="reservation-required-toggle"><input type="checkbox" data-event-packing-item-optional${item.required ? "" : " checked"} /><span>Optional</span></label></td>
+<td data-label="Notes"><input type="text" data-event-packing-item-notes value="${item.notes}" aria-label="Packing item notes" /></td>
+<td data-label="Actions"><button class="icon-button mini remove-record-icon" type="button" data-remove-event-packing-item="${item.id}" aria-label="Remove packing item">&times;</button></td>
+</tr>`,
+		)
+		.join("");
+	return `<section class="section event-packing-editor-section">
+<div class="section-heading">
+<div><p class="eyebrow">Packing</p><h2>Edit event packing list</h2></div>
+<p class="section-copy">Select prepared lists and add individual event items. The event view always reflects the current library lists.</p>
+</div>
+<div class="event-route-grid">
+<article class="panel">
+<div class="panel-heading"><h3>Prepared lists</h3><p>Select 0 or more library lists.</p></div>
+<div class="packing-list-option-grid">${listOptions}</div>
+</article>
+<article class="panel">
+<div class="panel-heading"><h3>Event items</h3><p>Individual items for this event.</p></div>
+<div class="table-wrap responsive-detail-table-wrap"><table class="data-table compact responsive-detail-table"><thead><tr><th>Name</th><th>Category</th><th>Quantity</th><th>Scope</th><th>Optional</th><th>Notes</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="7">No event-specific items.</td></tr>`}</tbody></table></div>
+<div class="event-editor-actions"><button class="button secondary" type="button" data-add-event-packing-item="${event.id}">Add item</button></div>
+</article>
+</div>
+${renderCollatedPackingList(event, { editor: true })}
+</section>`;
+}
+async function savePackingLists() {
+	packingLists = packingLists.map(normalizePackingList);
+	await postJson("/api/packing-lists", { packingLists });
+}
+function renderPackingListPrintContent(list) {
+	const categories = collateEventPackingList({ packingListIds: [list.id] }).categories;
+	return `${list.description ? `<p>${list.description}</p>` : ""}
+<div class="packing-category-grid">${categories.map((category) => `<div class="packing-library-category"><h4>${category.name}</h4><ul class="packing-item-list">${category.items.map((item) => renderPackingItemLine(item, true)).join("")}</ul></div>`).join("")}</div>`;
+}
+function renderPackingListEditor(list) {
+	const items = (list.items || []).sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+	return `<details class="panel packing-library-card" data-packing-library-list data-packing-list-editor="${list.id}">
+<summary class="panel-heading packing-list-summary">
+<h3><input type="text" data-packing-list-title value="${list.title}" aria-label="Packing list title" /></h3>
+<div class="packing-list-summary-actions">
+<button class="button secondary packing-list-print-button" type="button" data-print-packing-list>Print</button>
+<button class="icon-button mini remove-record-icon" type="button" data-delete-packing-list="${list.id}" aria-label="Remove ${list.title}" title="Remove ${list.title}">&times;</button>
+</div>
+</summary>
+<div class="packing-list-body packing-list-editor-body">
+<textarea data-packing-list-description aria-label="Packing list description">${list.description}</textarea>
+<div class="table-wrap responsive-detail-table-wrap"><table class="data-table compact responsive-detail-table"><thead><tr><th>Name</th><th>Category</th><th>Quantity</th><th>Scope</th><th>Optional</th><th>Notes</th><th>Actions</th></tr></thead><tbody>${items
+	.map((item, index) => `<tr data-packing-list-item="${item.id || `packing-item-${index + 1}`}"><td data-label="Name"><input type="text" data-packing-item-name value="${item.name}" aria-label="Item name" /></td><td data-label="Category"><input type="text" data-packing-item-category value="${item.category}" aria-label="Item category" /></td><td data-label="Quantity"><input type="text" data-packing-item-quantity value="${item.quantity}" aria-label="Item quantity" /></td><td data-label="Scope"><select data-packing-item-scope aria-label="Item scope"><option value="per-person"${item.scope === "per-person" ? " selected" : ""}>Per person</option><option value="per-patrol"${item.scope === "per-patrol" ? " selected" : ""}>Per patrol</option><option value="per-troop"${item.scope === "per-troop" ? " selected" : ""}>Per troop</option></select></td><td data-label="Optional"><label class="reservation-required-toggle"><input type="checkbox" data-packing-item-optional${item.required ? "" : " checked"} /><span>Optional</span></label></td><td data-label="Notes"><input type="text" data-packing-item-notes value="${item.notes}" aria-label="Item notes" /></td><td data-label="Actions"><button class="icon-button mini remove-record-icon" type="button" data-remove-packing-item="${item.id}" aria-label="Remove item">&times;</button></td></tr>`)
+	.join("")}</tbody></table></div>
+<div class="event-editor-actions"><button class="button secondary" type="button" data-add-packing-item="${list.id}">Add item</button></div>
+</div>
+<div class="packing-list-body packing-print-content">${renderPackingListPrintContent(list)}</div>
+</details>`;
+}
+function renderPackingListViewer(list) {
+	return `<details class="panel packing-library-card" data-packing-library-list>
+<summary class="panel-heading packing-list-summary"><div><h3>${list.title}</h3><p>${list.items.length} item${list.items.length === 1 ? "" : "s"}</p></div><button class="button secondary packing-list-print-button" type="button" data-print-packing-list>Print</button></summary>
+<div class="packing-list-body">
+${renderPackingListPrintContent(list)}
+</div>
+</details>`;
+}
+function printPackingLibraryList(list) {
+	if (!list) return;
+	document.querySelectorAll("[data-packing-library-list]").forEach((item) => {
+		delete item.dataset.printTarget;
+		delete item.dataset.printOpened;
+	});
+	document.body.classList.add("is-printing-packing-list");
+	list.dataset.printTarget = "true";
+	if (!list.open) {
+		list.open = true;
+		list.dataset.printOpened = "true";
+	}
+	window.print();
+}
+function syncPackingListsFromEditors() {
+	packingLists = [...document.querySelectorAll("[data-packing-list-editor]")]
+		.map((editor, listIndex) => {
+			const existing = packingLists.find((list) => list.id === editor.dataset.packingListEditor) || {};
+			const title = editor.querySelector("[data-packing-list-title]")?.value.trim() || existing.title || "Untitled packing list";
+			return normalizePackingList({
+				...existing,
+				id: existing.id || slugifyPackingValue(title, `packing-list-${listIndex + 1}`),
+				title,
+				description: editor.querySelector("[data-packing-list-description]")?.value.trim() || "",
+				items: [...editor.querySelectorAll("[data-packing-list-item]")]
+					.map((row, itemIndex) => normalizePackingItem({
+						id: row.dataset.packingListItem || `packing-item-${itemIndex + 1}`,
+						name: row.querySelector("[data-packing-item-name]")?.value.trim() || "",
+						category: row.querySelector("[data-packing-item-category]")?.value.trim() || "General",
+						quantity: row.querySelector("[data-packing-item-quantity]")?.value.trim() || "",
+						scope: row.querySelector("[data-packing-item-scope]")?.value || "per-person",
+						required: !row.querySelector("[data-packing-item-optional]")?.checked,
+						notes: row.querySelector("[data-packing-item-notes]")?.value.trim() || "",
+					}, itemIndex)),
+			});
+		});
+}
+function renderPackingListsRoute() {
+	const canManage = canSeeOrgChart();
+	const sortedLists = [...packingLists].sort((a, b) => a.title.localeCompare(b.title));
+	app.innerHTML = `${topNav()}<section class="dashboard-banner">
+<div>
+<p class="eyebrow">Packing Lists</p>
+<h2>Packing list library</h2>
+<p class="intro compact">${canManage ? "Adult leaders can manage prepared packing lists used by events." : "Prepared packing lists are visible to everyone."}</p>
+</div>
+<div class="status-chip"><span>Route</span><strong>/packing-lists</strong></div>
+</section>
+<section class="section">
+<div class="section-heading">
+<div><p class="eyebrow">Library</p><h2>${sortedLists.length} prepared lists</h2></div>
+${canManage ? `<div class="scribe-actions"><button class="button secondary" type="button" data-add-packing-list>Add list</button><button class="button primary" type="button" data-save-packing-lists>Save library</button></div>` : ""}
+</div>
+${typeof renderEditableError === "function" ? renderEditableError() : ""}
+<div class="detail-stack">${sortedLists.length ? sortedLists.map((list) => canManage ? renderPackingListEditor(list) : renderPackingListViewer(list)).join("") : `<article class="panel"><p>No packing lists are available.</p></article>`}</div>
+</section>`;
+}
+window.addEventListener("beforeprint", () => {
+	const printTarget = document.querySelector("[data-packing-library-list][data-print-target='true']");
+	if (printTarget) printTarget.open = true;
+});
+window.addEventListener("afterprint", () => {
+	document.querySelectorAll("[data-packing-library-list][data-print-opened]").forEach((list) => {
+		list.open = false;
+	});
+	document.querySelectorAll("[data-packing-library-list]").forEach((list) => {
+		delete list.dataset.printTarget;
+		delete list.dataset.printOpened;
+	});
+	document.body.classList.remove("is-printing-packing-list");
+});
 // Renders event route markup for the event UI.
 function renderEventRoute(eventId) {
 	const event = getEventById(eventId);
@@ -3563,6 +3903,9 @@ function renderEventRoute(eventId) {
 <iframe class="event-map" src="${mapUrlForLocation(eventHomeBase)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${eventHomeBase}"></iframe>
 </article>`
 		: "";
+	const packingListMarkup = visitorView
+		? renderCollatedPackingList(event)
+		: renderEventPackingEditor(event);
 	app.innerHTML = `${topNav()}<section class="event-route-hero">
 <div class="event-route-copy">
 <p class="eyebrow">${visitorView ? "Event details" : "Edit event"}</p>
@@ -3585,8 +3928,8 @@ ${heroHomeBaseMarkup}${event.repeatEnabled ? `<span>${repeatSummary}</span>` : "
 <a class="button secondary" href="#/events/${event.id}?edit=true">Edit</a>
 </div>`
 						: ""
-				}</article>${visitorHomeBasePanel}</section>${visitorActivitiesSection}<section class="section"><div class="section-heading"><div><p class="eyebrow">Gallery</p><h2>Event media</h2></div><p class="section-copy">Each image or video can carry its own caption, comments, and reactions.</p></div><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, false)).join("")}</div></section>`
-			: `<section class="section event-route-grid event-editor-grid"><article class="panel event-editor-panel"><div class="panel-heading"><h3 class="event-content-heading"><span>Event content</span><span class="event-save-status" data-event-save-status="${eventEditorSaveStatus}">${eventEditorStatusLabel()}</span></h3><p>Changes save automatically 2 seconds after the last change.</p>${typeof renderEditableError === "function" ? renderEditableError() : ""}</div><div class="table-wrap responsive-detail-table-wrap"><table class="data-table compact responsive-detail-table event-edit-table"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td data-label="Field">Title</td><td data-label="Value"><input type="text" data-event-edit-title value="${event.title}" aria-label="Event title" /></td></tr><tr><td data-label="Field">Category</td><td data-label="Value"><input type="text" data-event-edit-category value="${event.category}" aria-label="Event category" /></td></tr><tr><td data-label="Field">Start</td><td data-label="Value"><input type="datetime-local" data-event-edit-start value="${startValue}" aria-label="Event start date and time" /></td></tr><tr><td data-label="Field">End</td><td data-label="Value"><input type="datetime-local" data-event-edit-end value="${endValue}" aria-label="Event end date and time" /></td></tr><tr><td data-label="Field">Home base</td><td data-label="Value"><input type="text" data-event-edit-home-base value="${event.homeBase || ""}" aria-label="Location from where all activities will start" title="Location from where all activities will start" /></td></tr><tr><td data-label="Field">Audience</td><td data-label="Value"><select data-event-edit-audience aria-label="Event audience">${audienceOptions.map((audience) => `<option value="${audience}"${audience === event.audience ? " selected" : ""}>${audience}</option>`).join("")}</select></td></tr><tr><td data-label="Field">Description</td><td data-label="Value"><textarea data-event-edit-description aria-label="Event description">${event.description}</textarea></td></tr><tr><td data-label="Field">Detail note</td><td data-label="Value"><textarea data-event-edit-note aria-label="Event detail note">${event.detailNote}</textarea></td></tr><tr><td data-label="Field">Reservation</td><td data-label="Value"><label class="reservation-required-toggle"><input type="checkbox" data-event-edit-registration-required aria-label="Reservation required for this event"${event.registrationRequired ? " checked" : ""} /><span>Reservation required</span></label></td></tr><tr><td data-label="Field">Upcoming</td><td data-label="Value"><select data-event-edit-upcoming aria-label="Event upcoming status"><option value="true"${event.upcoming ? " selected" : ""}>Upcoming</option><option value="false"${!event.upcoming ? " selected" : ""}>Recent / past</option></select></td></tr><tr><td data-label="Field">Repeatable</td><td data-label="Value"><select data-event-edit-repeat-enabled aria-label="Whether this event repeats"><option value="false"${!event.repeatEnabled ? " selected" : ""}>No</option><option value="true"${event.repeatEnabled ? " selected" : ""}>Yes</option></select></td></tr>${repeatRows}</tbody></table></div><div class="event-editor-actions"><button class="button secondary" type="button" data-add-activity="${event.id}">Add activity</button><button class="button secondary" type="button" data-copy-event="${event.id}">Copy as new event</button><button class="button danger" type="button" data-delete-event="${event.id}">Remove event</button></div></article><article class="panel event-gallery-panel"><div class="panel-heading"><h3>Visitor gallery</h3><p>Upload one or more image or video files at once. Items are stored oldest to newest by upload time; the selected primary item still displays first.</p></div><label class="button secondary upload-button"><input class="visually-hidden-file-input" type="file" data-event-image-upload accept="image/*,video/*" multiple />Upload media</label><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, true)).join("")}</div></article></section><section class="section"><div class="panel map-panel event-map-panel"><div class="panel-heading"><h3>Home base map preview</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></div></section><section class="section event-activities-section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Edit event activities</h2></div><p class="section-copy">Each activity can have its own description, location, and start/end date and time.</p></div><div class="detail-stack event-activity-list">${activitiesMarkup}</div></section>`
+				}</article>${visitorHomeBasePanel}</section>${visitorActivitiesSection}${packingListMarkup}<section class="section"><div class="section-heading"><div><p class="eyebrow">Gallery</p><h2>Event media</h2></div><p class="section-copy">Each image or video can carry its own caption, comments, and reactions.</p></div><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, false)).join("")}</div></section>`
+			: `<section class="section event-route-grid event-editor-grid"><article class="panel event-editor-panel"><div class="panel-heading"><h3 class="event-content-heading"><span>Event content</span><span class="event-save-status" data-event-save-status="${eventEditorSaveStatus}">${eventEditorStatusLabel()}</span></h3><p>Changes save automatically 2 seconds after the last change.</p>${typeof renderEditableError === "function" ? renderEditableError() : ""}</div><div class="table-wrap responsive-detail-table-wrap"><table class="data-table compact responsive-detail-table event-edit-table"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody><tr><td data-label="Field">Title</td><td data-label="Value"><input type="text" data-event-edit-title value="${event.title}" aria-label="Event title" /></td></tr><tr><td data-label="Field">Category</td><td data-label="Value"><input type="text" data-event-edit-category value="${event.category}" aria-label="Event category" /></td></tr><tr><td data-label="Field">Start</td><td data-label="Value"><input type="datetime-local" data-event-edit-start value="${startValue}" aria-label="Event start date and time" /></td></tr><tr><td data-label="Field">End</td><td data-label="Value"><input type="datetime-local" data-event-edit-end value="${endValue}" aria-label="Event end date and time" /></td></tr><tr><td data-label="Field">Home base</td><td data-label="Value"><input type="text" data-event-edit-home-base value="${event.homeBase || ""}" aria-label="Location from where all activities will start" title="Location from where all activities will start" /></td></tr><tr><td data-label="Field">Audience</td><td data-label="Value"><select data-event-edit-audience aria-label="Event audience">${audienceOptions.map((audience) => `<option value="${audience}"${audience === event.audience ? " selected" : ""}>${audience}</option>`).join("")}</select></td></tr><tr><td data-label="Field">Description</td><td data-label="Value"><textarea data-event-edit-description aria-label="Event description">${event.description}</textarea></td></tr><tr><td data-label="Field">Detail note</td><td data-label="Value"><textarea data-event-edit-note aria-label="Event detail note">${event.detailNote}</textarea></td></tr><tr><td data-label="Field">Reservation</td><td data-label="Value"><label class="reservation-required-toggle"><input type="checkbox" data-event-edit-registration-required aria-label="Reservation required for this event"${event.registrationRequired ? " checked" : ""} /><span>Reservation required</span></label></td></tr><tr><td data-label="Field">Upcoming</td><td data-label="Value"><select data-event-edit-upcoming aria-label="Event upcoming status"><option value="true"${event.upcoming ? " selected" : ""}>Upcoming</option><option value="false"${!event.upcoming ? " selected" : ""}>Recent / past</option></select></td></tr><tr><td data-label="Field">Repeatable</td><td data-label="Value"><select data-event-edit-repeat-enabled aria-label="Whether this event repeats"><option value="false"${!event.repeatEnabled ? " selected" : ""}>No</option><option value="true"${event.repeatEnabled ? " selected" : ""}>Yes</option></select></td></tr>${repeatRows}</tbody></table></div><div class="event-editor-actions"><button class="button secondary" type="button" data-add-activity="${event.id}">Add activity</button><button class="button secondary" type="button" data-copy-event="${event.id}">Copy as new event</button><button class="button danger" type="button" data-delete-event="${event.id}">Remove event</button></div></article><article class="panel event-gallery-panel"><div class="panel-heading"><h3>Visitor gallery</h3><p>Upload one or more image or video files at once. Items are stored oldest to newest by upload time; the selected primary item still displays first.</p></div><label class="button secondary upload-button"><input class="visually-hidden-file-input" type="file" data-event-image-upload accept="image/*,video/*" multiple />Upload media</label><div class="event-gallery-grid">${gallery.map((image, index) => renderGalleryImageCard(event, image, index, true)).join("")}</div></article></section><section class="section"><div class="panel map-panel event-map-panel"><div class="panel-heading"><h3>Home base map preview</h3><p>Location from where all activities will start</p></div><iframe class="event-map" src="${mapUrlForLocation(event.homeBase || "")}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map for ${event.homeBase || "home base"}"></iframe></div></section>${packingListMarkup}<section class="section event-activities-section"><div class="section-heading"><div><p class="eyebrow">Activities</p><h2>Edit event activities</h2></div><p class="section-copy">Each activity can have its own description, location, and start/end date and time.</p></div><div class="detail-stack event-activity-list">${activitiesMarkup}</div></section>`
 	}`;
 }
 
